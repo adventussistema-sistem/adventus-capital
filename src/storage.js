@@ -1,7 +1,9 @@
-// Camada de armazenamento usada pelo App (window.storage). Hoje: localStorage.
-// Etapa 3: será substituída por Supabase mantendo a mesma interface.
+// window.storage usado pelo App. Com Supabase configurado grava na tabela
+// app_state; sem as variáveis (dev local) cai para localStorage.
+import { supabase, supabaseEnabled } from "./supabase.js";
 const keyFor = (key, shared) => (shared ? "shared:" : "priv:") + key;
-window.storage = {
+
+const local = {
   async get(key, shared) {
     const v = window.localStorage.getItem(keyFor(key, shared));
     return { key, value: v === null ? undefined : v, shared: !!shared };
@@ -15,3 +17,31 @@ window.storage = {
     return { key, shared: !!shared };
   },
 };
+
+const remote = {
+  async get(key, shared) {
+    const { data, error } = await supabase.from("app_state").select("value").eq("key", keyFor(key, shared)).maybeSingle();
+    if (error) throw error;
+    return { key, value: data ? data.value : undefined, shared: !!shared };
+  },
+  async set(key, value, shared) {
+    const { error } = await supabase.from("app_state").upsert({ key: keyFor(key, shared), value, updated_at: new Date().toISOString() });
+    if (error) throw error;
+    return { key, value, shared: !!shared };
+  },
+  async delete(key, shared) {
+    const { error } = await supabase.from("app_state").delete().eq("key", keyFor(key, shared));
+    if (error) throw error;
+    return { key, shared: !!shared };
+  },
+};
+
+// Só dados compartilhados (shared=true) vão para o Supabase. Sessão do usuário
+// (shared=false) fica no navegador de cada pessoa.
+const hybrid = {
+  get: (k, shared) => (shared ? remote.get(k, shared) : local.get(k, shared)),
+  set: (k, v, shared) => (shared ? remote.set(k, v, shared) : local.set(k, v, shared)),
+  delete: (k, shared) => (shared ? remote.delete(k, shared) : local.delete(k, shared)),
+};
+
+window.storage = supabaseEnabled ? hybrid : local;
