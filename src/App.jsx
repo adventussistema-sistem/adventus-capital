@@ -716,13 +716,23 @@ function RowActions({ onEdit, onDelete }) {
 
 /* ---------------------------- Login ---------------------------- */
 
-function LoginScreen({ users, onLogin, seeded }) {
+export function LoginScreen({ users, onLogin, seeded, remote }) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [error, setError] = useState("");
 
-  const submit = (e) => {
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
     e.preventDefault();
+    if (remote) {
+      setBusy(true);
+      setError("");
+      const msg = await remote.signIn(usuario.trim(), senha);
+      setBusy(false);
+      if (msg) setError(msg);
+      return;
+    }
     const found = users.find((u) => u.usuario === usuario.trim() && u.senha === senha);
     if (!found) {
       setError("Usuário ou senha incorretos.");
@@ -743,20 +753,20 @@ function LoginScreen({ users, onLogin, seeded }) {
       <div className="login-main">
       <form className="login-card" onSubmit={submit}>
         <h1 className="login-title">Acessar o sistema</h1>
-        {seeded && (
+        {seeded && !remote && (
           <p className="panel-note">
             Primeiro acesso: usuário <strong>admin</strong>, senha <strong>admin</strong>. Troque
             depois em Cadastros → Usuários.
           </p>
         )}
-        <Field label="Usuário">
-          <TextInput value={usuario} onChange={(e) => setUsuario(e.target.value)} required autoFocus />
+        <Field label={remote ? "E-mail" : "Usuário"}>
+          <TextInput type={remote ? "email" : "text"} value={usuario} onChange={(e) => setUsuario(e.target.value)} required autoFocus />
         </Field>
         <Field label="Senha">
           <TextInput type="password" value={senha} onChange={(e) => setSenha(e.target.value)} required />
         </Field>
         {error && <p className="login-error">{error}</p>}
-        <Btn type="submit">Entrar</Btn>
+        <Btn type="submit" disabled={busy}>{busy ? "Entrando…" : "Entrar"}</Btn>
       </form>
       </div>
     </div>
@@ -1278,11 +1288,11 @@ function UserFormFields({ value, onChange, editing, lideres, colaboradoresComuns
       <Field label="Nome">
         <TextInput value={value.nome} onChange={(e) => onChange({ ...value, nome: e.target.value })} required />
       </Field>
-      <Field label="Usuário (login)">
+      <Field label={window.__SUPABASE__ ? "E-mail de acesso (o mesmo da conta de login)" : "Usuário (login)"}>
         <TextInput value={value.usuario} onChange={(e) => onChange({ ...value, usuario: e.target.value })} required />
       </Field>
-      <Field label={editing ? "Senha (deixe em branco para manter)" : "Senha"}>
-        <TextInput type="password" value={value.senha} onChange={(e) => onChange({ ...value, senha: e.target.value })} required={!editing} />
+      <Field label={window.__SUPABASE__ ? "Senha interna (não usada: o acesso é pelo login por e-mail)" : editing ? "Senha (deixe em branco para manter)" : "Senha"}>
+        <TextInput type="password" value={value.senha} onChange={(e) => onChange({ ...value, senha: e.target.value })} required={!editing && !window.__SUPABASE__} />
       </Field>
       <Field label="Papel">
         <Select value={value.papel} onChange={(e) => onChange({ ...value, papel: e.target.value, colaboradorId: "" })}>
@@ -6263,7 +6273,7 @@ function navFor(user) {
   ];
 }
 
-export default function App() {
+export default function App({ authEmail, onSignOut } = {}) {
   const [db, setDb] = useState(emptyDb());
   const [loading, setLoading] = useState(true);
   const [storageAvailable, setStorageAvailable] = useState(true);
@@ -6411,7 +6421,7 @@ export default function App() {
     loadDb();
     (async () => {
       try {
-        if (window.storage) {
+        if (window.storage && !authEmail) {
           const res = await window.storage.get(SESSION_KEY, false);
           if (res && res.value) setCurrentUser(JSON.parse(res.value));
         }
@@ -6441,10 +6451,46 @@ export default function App() {
   };
   const handleLogout = () => {
     setCurrentUser(null);
+    if (onSignOut) onSignOut();
     if (window.storage && window.storage.delete) window.storage.delete(SESSION_KEY, false).catch(() => {});
   };
 
-  if (loading) {
+  // Com login único (Supabase): o e-mail autenticado define o usuário interno.
+  // No primeiro acesso, o "admin" inicial passa a ser o e-mail de quem entrou.
+  const emailKey = (authEmail || "").toLowerCase();
+  const matchUser = authEmail && !loading ? db.users.find((u) => (u.usuario || "").toLowerCase() === emailKey) : null;
+  const seedAdmin =
+    authEmail && !loading && !matchUser && db.users.length === 1 && db.users[0].usuario === "admin" && db.users[0].senha === "admin" ? db.users[0] : null;
+  useEffect(() => {
+    if (!authEmail || loading) return;
+    if (seedAdmin) {
+      mutate((d) => ({ ...d, users: d.users.map((u) => (u.id === seedAdmin.id ? { ...u, usuario: authEmail, senha: "" } : u)) }));
+    } else if (matchUser && (!currentUser || currentUser.id !== matchUser.id)) {
+      setCurrentUser(matchUser);
+    }
+  }, [authEmail, loading, db.users]);
+
+  if (authEmail && !loading && !matchUser && !seedAdmin) {
+    return (
+      <div className="app">
+        <AppStyles />
+        <div className="login-screen">
+          <div className="login-main" style={{ margin: "auto" }}>
+            <div className="login-card">
+              <h1 className="login-title">Acesso não liberado</h1>
+              <p className="panel-note">
+                O e-mail <strong>{authEmail}</strong> entrou, mas ainda não está cadastrado como usuário do sistema.
+                Peça à Diretoria para cadastrá-lo em Cadastros → Usuários.
+              </p>
+              <Btn onClick={handleLogout}>Sair</Btn>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading || (authEmail && !currentUser)) {
     return (
       <div className="app">
         <AppStyles />
@@ -6520,7 +6566,7 @@ export default function App() {
   );
 }
 
-function AppStyles() {
+export function AppStyles() {
   return (
     <style>{`
       :root {
