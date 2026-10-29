@@ -41,6 +41,7 @@ import {
   Scale,
   BarChart3,
   Repeat,
+  Clock,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------
@@ -85,6 +86,9 @@ const emptyDb = () => ({
   despesasCategorias: [],
   despesas: [],
   creditos: [],
+  caixa: { saldoAbertura: 0, mesAbertura: "" },
+  // ponto eletrônico: batidas importadas do relógio, vínculo identificador→colaborador e log de importações
+  ponto: { batidas: [], vinculos: {}, arquivos: [], nomes: {} },
 });
 
 // Motor de pontuação (esforço + resultado), inspirado no "Jogo de Metas" — cada indicador tem:
@@ -1049,7 +1053,7 @@ function CollaboratorsList({ items, allCollaborators, onAdd, onEdit, onDelete, s
 }
 
 function PartnersList({ items, onAdd, onEdit, onDelete }) {
-  const blank = { nome: "", percentual: "", base: "liberado" };
+  const blank = { nome: "", percentual: "", base: "honorario" };
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(blank);
@@ -1057,7 +1061,7 @@ function PartnersList({ items, onAdd, onEdit, onDelete }) {
   return (
     <div className="panel">
       <h3 className="panel-title">Parceiros estratégicos</h3>
-      <p className="panel-note">Cada parceiro tem seu próprio percentual de repasse, calculado sobre o valor liberado ou sobre o honorário bruto do cliente.</p>
+      <p className="panel-note">Cada parceiro tem seu próprio percentual de repasse, calculado sempre sobre o honorário pago pelo cliente à Adventus (não sobre o valor liberado ao cliente).</p>
       <form
         className="inline-form"
         onSubmit={(e) => {
@@ -1069,10 +1073,6 @@ function PartnersList({ items, onAdd, onEdit, onDelete }) {
       >
         <TextInput placeholder="Nome do parceiro" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} required />
         <TextInput type="number" step="0.01" placeholder="% de repasse" value={form.percentual} onChange={(e) => setForm({ ...form, percentual: e.target.value })} />
-        <Select value={form.base} onChange={(e) => setForm({ ...form, base: e.target.value })}>
-          <option value="liberado">Sobre valor liberado</option>
-          <option value="honorario">Sobre o honorário bruto</option>
-        </Select>
         <Btn type="submit">
           <Plus size={14} /> Adicionar
         </Btn>
@@ -1087,17 +1087,13 @@ function PartnersList({ items, onAdd, onEdit, onDelete }) {
                 <span style={{ display: "flex", gap: 8, flex: 1 }}>
                   <TextInput style={{ flex: 1 }} value={editForm.nome} onChange={(e) => setEditForm({ ...editForm, nome: e.target.value })} />
                   <TextInput type="number" step="0.01" style={{ width: 90 }} value={editForm.percentual} onChange={(e) => setEditForm({ ...editForm, percentual: e.target.value })} />
-                  <Select value={editForm.base} onChange={(e) => setEditForm({ ...editForm, base: e.target.value })}>
-                    <option value="liberado">Sobre liberado</option>
-                    <option value="honorario">Sobre honorário</option>
-                  </Select>
                 </span>
                 <span className="confirm-row">
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => {
                       if (!editForm.nome.trim()) return;
-                      onEdit(it.id, { ...editForm, percentual: Number(editForm.percentual) || 0 });
+                      onEdit(it.id, { ...editForm, percentual: Number(editForm.percentual) || 0, base: "honorario" });
                       setEditingId(null);
                     }}
                   >
@@ -1113,13 +1109,13 @@ function PartnersList({ items, onAdd, onEdit, onDelete }) {
                 <span>
                   {it.nome}
                   <Tag>
-                    {fmtPct(it.percentual)} · {it.base === "honorario" ? "honorário bruto" : "valor liberado"}
+                    {fmtPct(it.percentual)} · sobre o honorário pago pelo cliente
                   </Tag>
                 </span>
                 <RowActions
                   onEdit={() => {
                     setEditingId(it.id);
-                    setEditForm({ nome: it.nome, percentual: it.percentual, base: it.base });
+                    setEditForm({ nome: it.nome, percentual: it.percentual, base: "honorario" });
                   }}
                   onDelete={() => onDelete(it.id)}
                 />
@@ -1568,7 +1564,9 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
   const recalcParceiro = (merged) => {
     const partner = db.partners.find((p) => p.id === merged.parceiroId);
     if (!partner) return merged;
-    const base = partner.base === "honorario" ? merged.valorHonorario : merged.valorLiberado;
+    // Regra: a comissão do parceiro incide SEMPRE sobre o honorário pago pelo cliente
+    // à Adventus (independe do "base" antigo gravado no cadastro do parceiro).
+    const base = merged.valorHonorario;
     if (base === "" || base === undefined) return merged;
     return { ...merged, valorParceiro: (Number(base) * (Number(partner.percentual) / 100)).toFixed(2) };
   };
@@ -1585,7 +1583,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
   const selectedPartner = db.partners.find((p) => p.id === form.parceiroId);
   const percentualReceita = form.valorAprovado && form.valorAReceber ? (Number(form.valorAReceber) / Number(form.valorAprovado)) * 100 : 0;
   const pctHonorario = form.valorLiberado && form.valorHonorario ? (Number(form.valorHonorario) / Number(form.valorLiberado)) * 100 : 0;
-  const pctParceiro = form.valorLiberado && form.valorParceiro ? (Number(form.valorParceiro) / Number(form.valorLiberado)) * 100 : 0;
+  const pctParceiro = form.valorHonorario && form.valorParceiro ? (Number(form.valorParceiro) / Number(form.valorHonorario)) * 100 : 0;
   const liquidoPreview = (Number(form.valorHonorario) || 0) - (Number(form.valorParceiro) || 0) - (Number(form.imposto) || 0);
   const comissaoLiderPreview = form.liderId ? liquidoPreview * 0.03 : 0;
 
@@ -1686,7 +1684,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       </Field>
       <Field
         label="Parceiro estratégico"
-        hint={selectedPartner ? `Repasse: ${fmtPct(selectedPartner.percentual)} sobre ${selectedPartner.base === "honorario" ? "o honorário bruto" : "o valor liberado"}` : null}
+        hint={selectedPartner ? `Repasse: ${fmtPct(selectedPartner.percentual)} sobre o honorário pago pelo cliente` : null}
       >
         <Select value={form.parceiroId} onChange={(e) => updateForm({ parceiroId: e.target.value })}>
           <option value="">Nenhum</option>
@@ -1706,7 +1704,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       </Field>
       <Field
         label="Valor do parceiro (repasse/débito)"
-        hint={form.valorLiberado ? `${fmtPct(pctParceiro)} do valor liberado — pré-preenchido, edite se for exceção` : null}
+        hint={form.valorHonorario ? `${fmtPct(pctParceiro)} do honorário pago pelo cliente — pré-preenchido, edite se for exceção` : null}
       >
         <MoneyInput value={form.valorParceiro} onChange={(e) => setForm({ ...form, valorParceiro: e.target.value })} />
       </Field>
@@ -2062,6 +2060,43 @@ function lastMonths(n) {
 
 /* ---------------------------- Agenda de recebimentos ---------------------------- */
 
+// Espelho automático das OPERAÇÕES na agenda. Nada é gravado: as linhas são
+// derivadas a cada render, então mudar data/valor na operação já muda a agenda.
+//  - repasse da instituição: valorAReceber na dataRecebimentoBanco (recebido = op.recebidoBanco)
+//  - honorário do cliente: valorHonorario na dataCredito
+// Um lançamento manual para o mesmo vínculo (parcelas, histórico) tem prioridade e
+// suprime o espelho daquele vínculo, evitando contar duas vezes.
+function agendaAutomatica(db) {
+  const manuais = db.recebimentos || [];
+  const bancoManual = new Set(manuais.filter((r) => r.tipo === "banco").map((r) => r.refId));
+  const clienteManual = new Set(manuais.filter((r) => r.tipo === "cliente").map((r) => r.refId));
+  const out = [];
+  (db.operations || []).forEach((o) => {
+    const valor = Number(o.valorAReceber) || 0;
+    if (!o.dataRecebimentoBanco || valor <= 0 || bancoManual.has(o.id)) return;
+    out.push({
+      id: `auto-banco-${o.id}`, auto: true, tipo: "banco", refId: o.id,
+      descricao: "Repasse da instituição", valor,
+      dataVencimento: o.dataRecebimentoBanco, recebido: !!o.recebidoBanco,
+      dataRecebimento: o.recebidoBanco ? o.dataRecebimentoBanco : null,
+    });
+  });
+  (db.honorarios || []).forEach((h) => {
+    const valor = Number(h.valorHonorario) || 0;
+    if (!h.dataCredito || valor <= 0 || clienteManual.has(h.id)) return;
+    out.push({
+      id: `auto-cliente-${h.id}`, auto: true, tipo: "cliente", refId: h.id,
+      descricao: "Honorário do cliente", valor,
+      dataVencimento: h.dataCredito, recebido: false, dataRecebimento: null,
+    });
+  });
+  return out;
+}
+
+function agendaCompleta(db) {
+  return [...(db.recebimentos || []), ...agendaAutomatica(db)];
+}
+
 function RecebimentoForm({ db, editing, onSave, onCancel }) {
   const [form, setForm] = useState(
     editing || { tipo: "cliente", refId: "", descricao: "", valor: "", dataVencimento: todayISO() }
@@ -2073,7 +2108,7 @@ function RecebimentoForm({ db, editing, onSave, onCancel }) {
       onSubmit={(e) => {
         e.preventDefault();
         if (!form.refId || !form.valor || !form.dataVencimento) return;
-        onSave({ ...form, valor: Number(form.valor) });
+        onSave({ ...form, valor: Number(form.valor), recebido: !!form.recebido, dataRecebimento: form.recebido ? form.dataRecebimento || form.dataVencimento : null });
       }}
     >
       <Field label="Tipo de recebimento">
@@ -2107,6 +2142,15 @@ function RecebimentoForm({ db, editing, onSave, onCancel }) {
       <Field label="Data de vencimento">
         <TextInput type="date" value={form.dataVencimento} onChange={(e) => setForm({ ...form, dataVencimento: e.target.value })} required />
       </Field>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={!!form.recebido} onChange={(e) => setForm({ ...form, recebido: e.target.checked, dataRecebimento: form.dataRecebimento || form.dataVencimento })} />
+        <span>Já foi recebido (lançamento retroativo)</span>
+      </label>
+      {form.recebido && (
+        <Field label="Data do recebimento">
+          <TextInput type="date" value={form.dataRecebimento || ""} onChange={(e) => setForm({ ...form, dataRecebimento: e.target.value })} required />
+        </Field>
+      )}
       <div className="form-actions">
         <Btn type="submit">
           <Check size={14} /> Salvar
@@ -2126,7 +2170,23 @@ function AgendaPage({ db, mutate, user }) {
 
   const visibleHon = visibleHonorarios(db, user);
   const visibleHonIds = new Set(visibleHon.map((h) => h.id));
-  const list = db.recebimentos.filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
+  const list = agendaCompleta(db).filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
+
+  // dar baixa numa linha automática: o repasse grava na própria operação; o
+  // honorário vira um recebimento real (que passa a valer no fluxo de caixa).
+  const baixarAuto = (r, data) =>
+    mutate((d) => {
+      if (r.tipo === "banco") {
+        return { ...d, operations: d.operations.map((o) => (o.id === r.refId ? { ...o, recebidoBanco: true, dataRecebimentoBanco: data } : o)) };
+      }
+      return {
+        ...d,
+        recebimentos: [
+          ...d.recebimentos,
+          { id: uid(), tipo: "cliente", refId: r.refId, descricao: r.descricao, valor: r.valor, dataVencimento: r.dataVencimento, recebido: true, dataRecebimento: data },
+        ],
+      };
+    });
 
   const refLabel = (r) => {
     if (r.tipo === "cliente") {
@@ -2163,7 +2223,13 @@ function AgendaPage({ db, mutate, user }) {
   return (
     <div>
       <div className="page-header">
-        <h2>Agenda de recebimentos</h2>
+        <div>
+          <h2>Agenda de recebimentos</h2>
+          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
+            Os recebimentos futuros das Operações (repasse da instituição e honorário do cliente) aparecem aqui automaticamente, nas datas cadastradas na operação.
+            Use "Novo recebimento" só para parcelas ou lançamentos extras.
+          </p>
+        </div>
         <Btn onClick={() => { setEditingId(null); setShowForm(!showForm || editingId !== null); }}>
           <Plus size={14} /> Novo recebimento
         </Btn>
@@ -2209,7 +2275,10 @@ function AgendaPage({ db, mutate, user }) {
               <tr key={r.id}>
                 <td>{new Date(r.dataVencimento + "T00:00:00").toLocaleDateString("pt-BR")}</td>
                 <td>{refLabel(r)}</td>
-                <td>{r.descricao || "—"}</td>
+                <td>
+                  {r.descricao || "—"}
+                  {r.auto && <Tag>Automático</Tag>}
+                </td>
                 <td className="num">{fmtBRL(r.valor)}</td>
                 <td>
                   <Tag tone={r.status === "atrasado" ? "negative" : r.status === "recebido" ? "positive" : r.status === "hoje" ? "brass" : null}>
@@ -2218,19 +2287,23 @@ function AgendaPage({ db, mutate, user }) {
                 </td>
                 <td className="actions">
                   {!r.recebido && (
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() =>
-                        mutate((d) => ({ ...d, recebimentos: d.recebimentos.map((x) => (x.id === r.id ? { ...x, recebido: true, dataRecebimento: todayISO() } : x)) }))
+                    <DataConfirmBtn
+                      label="Marcar recebido"
+                      onConfirm={(data) =>
+                        r.auto
+                          ? baixarAuto(r, data)
+                          : mutate((d) => ({ ...d, recebimentos: d.recebimentos.map((x) => (x.id === r.id ? { ...x, recebido: true, dataRecebimento: data } : x)) }))
                       }
-                    >
-                      Marcar recebido
-                    </button>
+                    />
                   )}
-                  <RowActions
-                    onEdit={() => { setEditingId(r.id); setShowForm(true); }}
-                    onDelete={() => mutate((d) => ({ ...d, recebimentos: d.recebimentos.filter((x) => x.id !== r.id) }))}
-                  />
+                  {r.auto ? (
+                    <span className="muted" style={{ fontSize: 11.5 }}>edite em Operações</span>
+                  ) : (
+                    <RowActions
+                      onEdit={() => { setEditingId(r.id); setShowForm(true); }}
+                      onDelete={() => mutate((d) => ({ ...d, recebimentos: d.recebimentos.filter((x) => x.id !== r.id) }))}
+                    />
+                  )}
                 </td>
               </tr>
             ))}
@@ -2242,6 +2315,31 @@ function AgendaPage({ db, mutate, user }) {
 }
 
 /* ---------------------------- Financeiro interno ---------------------------- */
+
+// Botão "Marcar pago/recebido" que pede a data efetiva (padrão: hoje), para
+// permitir baixas retroativas — o caixa usa essa data, não a do clique.
+function DataConfirmBtn({ label, onConfirm }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(todayISO());
+  if (!open) {
+    return (
+      <button className="btn btn-ghost btn-sm" onClick={() => { setData(todayISO()); setOpen(true); }}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <input className="input" type="date" title="Data efetiva" value={data} onChange={(e) => setData(e.target.value)} style={{ width: 140 }} />
+      <button className="btn btn-primary btn-sm" disabled={!data} onClick={() => { onConfirm(data); setOpen(false); }}>
+        Confirmar
+      </button>
+      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
+        Cancelar
+      </button>
+    </span>
+  );
+}
 
 function DespesaForm({ db, editing, onSave, onCancel }) {
   const [form, setForm] = useState(
@@ -2262,7 +2360,7 @@ function DespesaForm({ db, editing, onSave, onCancel }) {
       onSubmit={(e) => {
         e.preventDefault();
         if (!form.descricao.trim() || !form.categoriaId || !form.valor || !form.dataVencimento) return;
-        onSave({ ...form, descricao: form.descricao.trim(), valor: Number(form.valor) });
+        onSave({ ...form, descricao: form.descricao.trim(), valor: Number(form.valor), pago: !!form.pago, dataPagamento: form.pago ? form.dataPagamento || form.dataVencimento : null });
       }}
     >
       <Field label="Descrição">
@@ -2294,6 +2392,15 @@ function DespesaForm({ db, editing, onSave, onCancel }) {
         <input type="checkbox" checked={!!form.recorrente} onChange={(e) => setForm({ ...form, recorrente: e.target.checked })} />
         <span>Despesa recorrente (se repete todo mês)</span>
       </label>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={!!form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked, dataPagamento: form.dataPagamento || form.dataVencimento })} />
+        <span>Já foi paga (lançamento retroativo)</span>
+      </label>
+      {form.pago && (
+        <Field label="Data do pagamento">
+          <TextInput type="date" value={form.dataPagamento || ""} onChange={(e) => setForm({ ...form, dataPagamento: e.target.value })} required />
+        </Field>
+      )}
       <div className="form-actions">
         <Btn type="submit">
           <Check size={14} /> Salvar
@@ -2486,14 +2593,12 @@ function DespesasPage({ db, mutate }) {
                   </td>
                   <td className="actions">
                     {!d.pago && (
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() =>
-                          mutate((db2) => ({ ...db2, despesas: db2.despesas.map((x) => (x.id === d.id ? { ...x, pago: true, dataPagamento: todayISO() } : x)) }))
+                      <DataConfirmBtn
+                        label="Marcar pago"
+                        onConfirm={(data) =>
+                          mutate((db2) => ({ ...db2, despesas: db2.despesas.map((x) => (x.id === d.id ? { ...x, pago: true, dataPagamento: data } : x)) }))
                         }
-                      >
-                        Marcar pago
-                      </button>
+                      />
                     )}
                     <RowActions
                       onEdit={() => { setEditingId(d.id); setShowForm(true); }}
@@ -2517,75 +2622,199 @@ function DespesasPage({ db, mutate }) {
   );
 }
 
-function FluxoCaixaPanel({ db }) {
-  const months = lastMonths(6);
-  const rows = months.map((ym) => fluxoCaixaMes(db, ym));
-  let acumulado = 0;
-  const withRunning = rows.map((r) => {
-    acumulado += r.saldo;
-    return { ...r, acumulado };
-  });
-  const byMonthSaldo = {};
-  rows.forEach((r) => (byMonthSaldo[r.ym] = r.saldo));
+const nextYm = (ym) => {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+const monthsBetween = (from, to) => {
+  const out = [];
+  for (let m = from; m <= to && out.length < 60; m = nextYm(m)) out.push(m);
+  return out;
+};
 
+// Saldo no 1º dia do mês: saldo de abertura (informado) + resultado de caixa de
+// cada mês desde o mês de abertura. Meses anteriores à abertura partem de zero.
+function saldoInicialMes(db, ym) {
+  const ab = (db.caixa && db.caixa.mesAbertura) || `${new Date().getFullYear()}-01`;
+  if (ym < ab) return 0;
+  let saldo = Number(db.caixa && db.caixa.saldoAbertura) || 0;
+  for (let m = ab; m < ym; m = nextYm(m)) saldo += fluxoCaixaMes(db, m).saldo;
+  return round2(saldo);
+}
+
+function EntradasSaidasChart({ rows }) {
+  if (rows.length === 0) return <EmptyState text="Sem dados no período." />;
+  const w = 640, h = 170, pad = 24;
+  const max = Math.max(...rows.flatMap((r) => [r.entradas, r.saidas]), 1);
+  const slot = (w - pad * 2) / rows.length;
+  const bw = Math.max(4, slot / 2 - 4);
+  const y = (v) => h - 20 - (v / max) * (h - 44);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 170 }} role="img" aria-label="Entradas e saídas por mês">
+      {rows.map((r, i) => {
+        const x = pad + i * slot + 2;
+        const [yy, mm] = r.ym.split("-");
+        return (
+          <g key={r.ym}>
+            <rect x={x} y={y(r.entradas)} width={bw} height={h - 20 - y(r.entradas)} fill="var(--positive)" opacity="0.85" rx="2" />
+            <rect x={x + bw + 2} y={y(r.saidas)} width={bw} height={h - 20 - y(r.saidas)} fill="var(--negative)" opacity="0.85" rx="2" />
+            <text x={x + bw} y={h - 6} fontSize="9" textAnchor="middle" fill="var(--text-muted)">
+              {mm}/{yy.slice(2)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function FluxoCaixaPanel({ db, mutate }) {
+  const now = new Date();
+  const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const prevYm = (() => {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const [preset, setPreset] = useState("ano");
+  const [cFrom, setCFrom] = useState(`${now.getFullYear()}-01`);
+  const [cTo, setCTo] = useState(curYm);
+  const [abSaldo, setAbSaldo] = useState(String((db.caixa && db.caixa.saldoAbertura) || ""));
+  const [abMes, setAbMes] = useState((db.caixa && db.caixa.mesAbertura) || `${now.getFullYear()}-01`);
+
+  let from = `${now.getFullYear()}-01`;
+  let to = curYm;
+  if (preset === "mes") { from = curYm; to = curYm; }
+  if (preset === "mesAnterior") { from = prevYm; to = prevYm; }
+  if (preset === "anoAnterior") { from = `${now.getFullYear() - 1}-01`; to = `${now.getFullYear() - 1}-12`; }
+  if (preset === "custom") { from = cFrom && cTo && cFrom > cTo ? cTo : cFrom || curYm; to = cFrom && cTo && cFrom > cTo ? cFrom : cTo || curYm; }
+
+  const months = monthsBetween(from, to);
+  let saldo = saldoInicialMes(db, from);
+  const rows = months.map((ym) => {
+    const r = fluxoCaixaMes(db, ym);
+    const saldoInicial = saldo;
+    saldo = round2(saldo + r.saldo);
+    return { ...r, saldoInicial, saldoFinal: saldo };
+  });
   const totalEntradas = rows.reduce((s, r) => s + r.entradas, 0);
   const totalSaidas = rows.reduce((s, r) => s + r.saidas, 0);
+  const saldoInicialPeriodo = rows.length ? rows[0].saldoInicial : 0;
+  const saldoFinalPeriodo = rows.length ? rows[rows.length - 1].saldoFinal : 0;
+  const byMonthSaldoFinal = {};
+  rows.forEach((r) => (byMonthSaldoFinal[r.ym] = r.saldoFinal));
 
   return (
     <div>
       <p className="panel-note">
-        Regime de caixa: considera apenas o que de fato entrou ou saiu do caixa em cada mês — honorários e
-        repasses de instituições já <em>recebidos</em>, parcelas do crédito próprio já <em>pagas</em> (entrada) e
-        principal emprestado na data do contrato (saída), despesas já <em>pagas</em>. Valores lançados mas
-        ainda pendentes aparecem na Agenda de recebimentos / Contas a pagar, não aqui.
+        Regime de caixa: considera apenas o que de fato entrou ou saiu do caixa em cada mês, pela <strong>data efetiva</strong> do
+        recebimento ou pagamento — honorários e repasses de instituições <em>recebidos</em>, parcelas do crédito próprio <em>pagas</em>{" "}
+        (entrada), principal emprestado na data do contrato (saída) e despesas <em>pagas</em>. Para lançar dados antigos, registre a data
+        real em Agenda de recebimentos e em Despesas. Valores ainda pendentes não entram aqui.
       </p>
+
+      <div className="page-header" style={{ marginBottom: 12 }}>
+        <h2 style={{ fontSize: 16 }}>Período</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Select value={preset} onChange={(e) => setPreset(e.target.value)}>
+            <option value="ano">Ano atual (desde janeiro)</option>
+            <option value="mes">Mês atual</option>
+            <option value="mesAnterior">Mês anterior</option>
+            <option value="anoAnterior">Ano anterior</option>
+            <option value="custom">Período personalizado</option>
+          </Select>
+          {preset === "custom" && (
+            <>
+              <TextInput type="month" value={cFrom} onChange={(e) => setCFrom(e.target.value)} aria-label="De" />
+              <TextInput type="month" value={cTo} onChange={(e) => setCTo(e.target.value)} aria-label="Até" />
+            </>
+          )}
+        </div>
+      </div>
 
       <div className="cards-grid">
         <div className="stat-card">
-          <span className="stat-label">Entradas (últimos 6 meses)</span>
+          <span className="stat-label">Saldo inicial</span>
+          <span className="stat-value">{fmtBRL(saldoInicialPeriodo)}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Entradas no período</span>
           <span className="stat-value">{fmtBRL(totalEntradas)}</span>
         </div>
         <div className="stat-card">
-          <span className="stat-label">Saídas (últimos 6 meses)</span>
+          <span className="stat-label">Saídas no período</span>
           <span className="stat-value">{fmtBRL(totalSaidas)}</span>
         </div>
-        <div className={`stat-card ${totalEntradas - totalSaidas >= 0 ? "stat-card-highlight" : ""}`}>
-          <span className="stat-label">Saldo do período</span>
-          <span className="stat-value">{fmtBRL(totalEntradas - totalSaidas)}</span>
+        <div className={`stat-card ${saldoFinalPeriodo >= 0 ? "stat-card-highlight" : ""}`}>
+          <span className="stat-label">Saldo final</span>
+          <span className="stat-value">{fmtBRL(saldoFinalPeriodo)}</span>
         </div>
       </div>
 
-      <div className="panel">
-        <h3 className="panel-title">Saldo mensal de caixa</h3>
-        <MonthlyChart byMonth={byMonthSaldo} />
+      <div className="two-col">
+        <div className="panel">
+          <h3 className="panel-title">Entradas × saídas por mês</h3>
+          <EntradasSaidasChart rows={rows} />
+        </div>
+        <div className="panel">
+          <h3 className="panel-title">Saldo acumulado (fim de cada mês)</h3>
+          <MonthlyChart byMonth={byMonthSaldoFinal} />
+        </div>
       </div>
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Mês</th>
-            <th>Entradas</th>
-            <th>Saídas</th>
-            <th>Crédito: recebido</th>
-            <th>Crédito: emprestado</th>
-            <th>Saldo do mês</th>
-            <th>Saldo acumulado</th>
-          </tr>
-        </thead>
-        <tbody>
-          {withRunning.map((r) => (
-            <tr key={r.ym}>
-              <td>{monthLabel(r.ym)}</td>
-              <td className="num positive">{fmtBRL(r.entradas)}</td>
-              <td className="num negative">{fmtBRL(r.saidas)}</td>
-              <td className="num">{fmtBRL(r.entradasCredito)}</td>
-              <td className="num">{fmtBRL(r.saidasCredito)}</td>
-              <td className={`num strong ${r.saldo >= 0 ? "positive" : "negative"}`}>{fmtBRL(r.saldo)}</td>
-              <td className={`num strong ${r.acumulado >= 0 ? "positive" : "negative"}`}>{fmtBRL(r.acumulado)}</td>
+      <div style={{ overflowX: "auto" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Mês</th>
+              <th>Saldo inicial</th>
+              <th>Entradas</th>
+              <th>Saídas</th>
+              <th>Crédito: recebido</th>
+              <th>Crédito: emprestado</th>
+              <th>Saldo do mês</th>
+              <th>Saldo final</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.ym}>
+                <td>{monthLabel(r.ym)}</td>
+                <td className="num">{fmtBRL(r.saldoInicial)}</td>
+                <td className="num positive">{fmtBRL(r.entradas)}</td>
+                <td className="num negative">{fmtBRL(r.saidas)}</td>
+                <td className="num">{fmtBRL(r.entradasCredito)}</td>
+                <td className="num">{fmtBRL(r.saidasCredito)}</td>
+                <td className={`num strong ${r.saldo >= 0 ? "positive" : "negative"}`}>{fmtBRL(r.saldo)}</td>
+                <td className={`num strong ${r.saldoFinal >= 0 ? "positive" : "negative"}`}>{fmtBRL(r.saldoFinal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <form
+        className="panel form-grid"
+        style={{ marginTop: 16 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          mutate((d) => ({ ...d, caixa: { saldoAbertura: round2(abSaldo), mesAbertura: abMes } }));
+        }}
+      >
+        <h3 className="panel-title" style={{ gridColumn: "1 / -1", margin: 0 }}>Saldo de abertura do caixa</h3>
+        <p className="panel-note" style={{ gridColumn: "1 / -1", margin: 0 }}>
+          Quanto havia em caixa no 1º dia do mês de abertura (padrão: janeiro do ano atual, R$ 0,00). Os saldos dos meses seguintes partem daqui.
+        </p>
+        <Field label="Saldo de abertura">
+          <MoneyInput value={abSaldo} onChange={(e) => setAbSaldo(e.target.value)} />
+        </Field>
+        <Field label="Mês de abertura">
+          <TextInput type="month" value={abMes} onChange={(e) => setAbMes(e.target.value)} required />
+        </Field>
+        <div className="form-actions">
+          <Btn type="submit">Salvar saldo de abertura</Btn>
+        </div>
+      </form>
     </div>
   );
 }
@@ -2682,7 +2911,7 @@ function FinanceiroPage({ db, mutate, user }) {
           onDelete={(id) => mutate((d) => ({ ...d, despesasCategorias: (d.despesasCategorias || []).filter((x) => x.id !== id) }))}
         />
       )}
-      {tab === "fluxo" && <FluxoCaixaPanel db={db} />}
+      {tab === "fluxo" && <FluxoCaixaPanel db={db} mutate={mutate} />}
       {tab === "dre" && <DREPanel db={db} />}
     </div>
   );
@@ -3979,7 +4208,7 @@ function Dashboard({ db, user }) {
   const receitaInstituicoes = operationsInPeriod.reduce((s, o) => s + (Number(o.valorAReceber) || 0), 0);
 
   const visibleHonIds = new Set(rows.map((r) => r.id));
-  const recebimentos = db.recebimentos.filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
+  const recebimentos = agendaCompleta(db).filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
   const statusCounts = recebimentos.reduce((acc, r) => {
     const s = recebimentoStatus(r);
     acc[s] = (acc[s] || 0) + 1;
@@ -4273,14 +4502,16 @@ function Dashboard({ db, user }) {
 
 /* ---------------------------- Metas de esforço ---------------------------- */
 
-function MetricaFormFields({ value, onChange }) {
+function MetricaFormFields({ value, onChange, fixedCategoria }) {
   return (
     <>
       <TextInput placeholder="Nome do indicador" value={value.nome} onChange={(e) => onChange({ ...value, nome: e.target.value })} />
-      <Select value={value.categoria} onChange={(e) => onChange({ ...value, categoria: e.target.value })}>
-        <option value="esforco">Esforço</option>
-        <option value="resultado">Resultado</option>
-      </Select>
+      {!fixedCategoria && (
+        <Select value={value.categoria} onChange={(e) => onChange({ ...value, categoria: e.target.value })}>
+          <option value="esforco">Esforço</option>
+          <option value="resultado">Resultado</option>
+        </Select>
+      )}
       <Select value={value.tipo} onChange={(e) => onChange({ ...value, tipo: e.target.value })}>
         {Object.entries(TIPO_LABEL).map(([k, l]) => (
           <option key={k} value={k}>
@@ -4837,9 +5068,150 @@ function EsforcoPage({ db, mutate, user }) {
   );
 }
 
+/* ---------------------------- Ranking: parâmetros de esforço ---------------------------- */
+
+// Define COMO o esforço é avaliado no Ranking: cada parâmetro é um indicador de
+// categoria "esforço" (o que é medido, meta no período, pontos por unidade e bônus
+// ao bater a meta). A Diretora cadastra/edita; os demais veem as regras (leitura).
+function ParametrosEsforcoPanel({ db, mutate, isDiretora }) {
+  const blank = { nome: "", categoria: "esforco", tipo: "qtd", periodo: "semanal", meta: "", pts: "", bonus: "", dailyMin: "", dica: "" };
+  const [form, setForm] = useState(blank);
+  const [editingId, setEditingId] = useState(null);
+  const todas = db.metricas || [];
+  const params = todas.filter((m) => m.categoria === "esforco");
+  const save = (list) => mutate((d) => ({ ...d, metricas: list }));
+  const fmtMeta = (m) => (m.tipo === "tempo" ? `${Math.floor(m.meta / 60)}h${String(m.meta % 60).padStart(2, "0")}` : m.tipo === "valor" ? fmtBRL(m.meta) : String(m.meta));
+  const regra = (m) => {
+    const un = m.tipo === "tempo" ? "por hora" : m.tipo === "valor" ? "por R$ 1.000" : "por unidade";
+    return `${m.pts} pt${Number(m.pts) === 1 ? "" : "s"} ${un}`;
+  };
+  // pontuação máxima de esforço por período se todas as metas forem batidas
+  const maxPeriodo = (per) =>
+    Math.round(
+      params
+        .filter((m) => m.ativo !== false && m.periodo === per && m.meta > 0)
+        .reduce((t, m) => t + unitPts(m, m.meta) + (Number(m.bonus) || 0), 0)
+    );
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!form.nome.trim() || form.meta === "") return;
+    const dados = {
+      nome: form.nome.trim(),
+      categoria: "esforco",
+      tipo: form.tipo,
+      periodo: form.periodo,
+      meta: Number(form.meta) || 0,
+      pts: Number(form.pts) || 0,
+      bonus: Number(form.bonus) || 0,
+      dailyMin: Number(form.dailyMin) || 0,
+    };
+    if (editingId) save(todas.map((x) => (x.id === editingId ? { ...x, ...dados } : x)));
+    else save([...todas, { id: uid(), ...dados, ativo: true, fonte: "manual", dica: "" }]);
+    setForm(blank);
+    setEditingId(null);
+  };
+
+  return (
+    <div>
+      <div className="cards-grid">
+        <div className="stat-card">
+          <span className="stat-label">Parâmetros de esforço ativos</span>
+          <span className="stat-value">{params.filter((m) => m.ativo !== false).length}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Máximo de pontos de esforço / semana</span>
+          <span className="stat-value">{maxPeriodo("semanal")}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Máximo de pontos de esforço / mês</span>
+          <span className="stat-value">{maxPeriodo("mensal")}</span>
+        </div>
+      </div>
+      <div className="panel">
+        <h3 className="panel-title">Parâmetros de avaliação do esforço</h3>
+        <p className="panel-note">
+          O esforço do consultor no Ranking é a soma dos pontos de cada parâmetro abaixo: o que ele registra em "Registrar esforço" vezes os pontos por unidade, mais o
+          bônus quando bate a meta do período. O máximo mostrado nos cards considera bater exatamente cada meta (pontos até a meta + bônus); passar da meta rende ainda mais pontos.
+        </p>
+        {isDiretora && (
+          <form className="inline-form" onSubmit={submit}>
+            <MetricaFormFields value={form} onChange={setForm} fixedCategoria />
+            <Btn type="submit">
+              {editingId ? <Check size={14} /> : <Plus size={14} />} {editingId ? "Salvar" : "Adicionar"}
+            </Btn>
+            {editingId && (
+              <Btn type="button" variant="ghost" onClick={() => { setEditingId(null); setForm(blank); }}>
+                Cancelar
+              </Btn>
+            )}
+          </form>
+        )}
+        {!params.length ? (
+          <EmptyState text="Nenhum parâmetro de esforço cadastrado." />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Parâmetro</th>
+                <th>Período</th>
+                <th>Meta</th>
+                <th>Pontuação</th>
+                <th>Bônus ao bater a meta</th>
+                <th>Status</th>
+                {isDiretora && <th></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {params.map((m) => (
+                <tr key={m.id} style={m.ativo === false ? { opacity: 0.55 } : undefined}>
+                  <td>
+                    {m.nome}
+                    {m.dica && (
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {m.dica}
+                      </div>
+                    )}
+                  </td>
+                  <td>{m.periodo === "semanal" ? "Semanal" : "Mensal"}</td>
+                  <td>{fmtMeta(m)}</td>
+                  <td>{regra(m)}</td>
+                  <td>{m.bonus ? `+${m.bonus} pts` : "—"}</td>
+                  <td>
+                    {isDiretora ? (
+                      <button className="link-btn" onClick={() => save(todas.map((x) => (x.id === m.id ? { ...x, ativo: x.ativo === false } : x)))}>
+                        {m.ativo === false ? "Inativo" : "Ativo"}
+                      </button>
+                    ) : (
+                      <Tag tone={m.ativo === false ? null : "green"}>{m.ativo === false ? "Inativo" : "Ativo"}</Tag>
+                    )}
+                  </td>
+                  {isDiretora && (
+                    <td>
+                      <RowActions
+                        onEdit={() => {
+                          setEditingId(m.id);
+                          setForm({ nome: m.nome, categoria: "esforco", tipo: m.tipo, periodo: m.periodo, meta: m.meta, pts: m.pts, bonus: m.bonus, dailyMin: m.dailyMin || "", dica: m.dica || "" });
+                        }}
+                        onDelete={() => save(todas.filter((x) => x.id !== m.id))}
+                      />
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------- Ranking ---------------------------- */
 
-function RankingPage({ db, user }) {
+function RankingPage({ db, user, mutate }) {
+  const [aba, setAba] = useState("ranking");
+  const isDiretora = user.papel === "diretora";
   const team = teamColaboradorIds(db, user);
   const visibleCollaborators = (team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id))).filter((c) => c.papel !== "diretora");
   const [periodo, setPeriodo] = useState("semana");
@@ -4870,6 +5242,24 @@ function RankingPage({ db, user }) {
   const rest = rows.slice(3);
   const allZero = rows.length && rows.every((x) => valOf(x) === 0);
 
+  if (aba === "parametros") {
+    return (
+      <div>
+        <div className="page-header">
+          <div>
+            <h2>Ranking de consultores</h2>
+            <p className="muted">Regras de pontuação do esforço usadas no ranking.</p>
+          </div>
+        </div>
+        <div className="subtabs">
+          <button className="subtab" onClick={() => setAba("ranking")}>Ranking</button>
+          <button className="subtab subtab-active">Parâmetros de esforço</button>
+        </div>
+        <ParametrosEsforcoPanel db={db} mutate={mutate} isDiretora={isDiretora} />
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -4896,6 +5286,10 @@ function RankingPage({ db, user }) {
             <ArrowDown size={14} style={{ transform: "rotate(-90deg)" }} />
           </button>
         </div>
+      </div>
+      <div className="subtabs">
+        <button className="subtab subtab-active">Ranking</button>
+        <button className="subtab" onClick={() => setAba("parametros")}>Parâmetros de esforço</button>
       </div>
       <div className="seg" style={{ marginBottom: 16 }}>
         <button className={criterio === "geral" ? "seg-active" : ""} onClick={() => setCriterio("geral")}>
@@ -6241,6 +6635,538 @@ function LinksPage({ db, mutate, user }) {
   );
 }
 
+/* ---------------------------- Ponto eletrônico ----------------------------
+   Etapa 1: importar o arquivo TXT (AFD) gravado pelo relógio de ponto, ligar
+   cada identificador (CPF/PIS/matrícula) a um colaborador e mostrar o espelho de
+   ponto do mês, com exportação em CSV para a contabilidade. Ainda NÃO calcula
+   horas extras, atrasos, banco de horas nem faz lançamento na folha — essas regras
+   dependem de jornada e de validação da contadora (etapas seguintes).
+   Dados: db.ponto = { batidas: [{id, ident, data, hora, arquivoId}], vinculos: {ident: colaboradorId}, arquivos: [...] } */
+
+const pontoIdent = (s) => String(s || "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+const pontoIdentLabel = (id) =>
+  id.length === 11 ? `${id.slice(0, 3)}.${id.slice(3, 6)}.${id.slice(6, 9)}-${id.slice(9)}` : id;
+const pontoDataOk = (y, m, d) => {
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return Number(y) > 1999 && dt.getFullYear() === Number(y) && dt.getMonth() === Number(m) - 1 && dt.getDate() === Number(d);
+};
+const pontoHoraOk = (h, m) => Number(h) < 24 && Number(m) < 60;
+const PONTO_DIAS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const fmtHM = (min) => `${Math.floor(min / 60)}h${String(min % 60).padStart(2, "0")}`;
+const decHoras = (min) => (min / 60).toFixed(2).replace(".", ",");
+
+// Lê o conteúdo de um TXT de relógio de ponto. Aceita:
+//  - AFD da Portaria 1510/2009: NSR(9) + "3" + ddmmaaaa + hhmm + PIS(12)
+//  - AFD da Portaria 671/2021: NSR(9) + "3" ou "7" + data/hora ISO 8601 (24) + CPF(12)
+//  - "Registro de comparecimento" (relógio com colunas separadas por tabulação):
+//      Tra. No. | Nome | dept. | dd/mm/aaaa hh:mm:ss | Máquina No.
+//  - modo genérico: linha com uma data, uma hora e um número de 4 a 14 dígitos
+// Linhas de cabeçalho/rodapé e de outros tipos são ignoradas.
+export function parseAFD(text) {
+  const lines = String(text || "").replace(/^﻿/, "").replace(/\r/g, "").split("\n").filter((l) => l.trim());
+  const out = { formato: "", linhas: lines.length, batidas: [], ignoradas: 0, duplicadasNoArquivo: 0, nomes: {} };
+  const cont = { a1510: 0, a671: 0, tabulado: 0, generico: 0 };
+  const vistos = new Set();
+  const add = (ident, data, hora, tipo, nome) => {
+    const id = pontoIdent(ident);
+    if (!id) { out.ignoradas++; return; }
+    if (nome && !out.nomes[id]) out.nomes[id] = String(nome).trim();
+    const k = `${id}|${data}|${hora}`;
+    if (vistos.has(k)) { out.duplicadasNoArquivo++; return; }
+    vistos.add(k);
+    cont[tipo]++;
+    out.batidas.push({ ident: id, data, hora });
+  };
+  lines.forEach((l) => {
+    const tipoReg = l[9];
+    // 671: data e hora em ISO 8601 logo após o tipo
+    const iso = l.slice(10, 34).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):\d{2}[-+]\d{4}$/);
+    if (l.length >= 46 && (tipoReg === "3" || tipoReg === "7") && /^\d{9}$/.test(l.slice(0, 9)) && iso) {
+      if (pontoDataOk(iso[1], iso[2], iso[3]) && pontoHoraOk(iso[4], iso[5])) add(l.slice(34, 46), `${iso[1]}-${iso[2]}-${iso[3]}`, `${iso[4]}:${iso[5]}`, "a671");
+      else out.ignoradas++;
+      return;
+    }
+    // 1510: tipo 3 com ddmmaaaa hhmm PIS(12)
+    if (l.length >= 34 && tipoReg === "3" && /^\d{9}$/.test(l.slice(0, 9)) && /^\d{12}$/.test(l.slice(10, 22))) {
+      const d = l.slice(10, 12), m = l.slice(12, 14), y = l.slice(14, 18), hh = l.slice(18, 20), mm = l.slice(20, 22);
+      if (pontoDataOk(y, m, d) && pontoHoraOk(hh, mm)) add(l.slice(22, 34), `${y}-${m}-${d}`, `${hh}:${mm}`, "a1510");
+      else out.ignoradas++;
+      return;
+    }
+    // relógio com colunas separadas por tabulação (nome + "dd/mm/aaaa hh:mm:ss")
+    if (l.includes("\t")) {
+      const cols = l.split("\t").map((c) => c.trim());
+      const idx = cols.findIndex((c) => /^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(:\d{2})?$/.test(c));
+      if (idx > 0 && /^\d{1,14}$/.test(cols[0])) {
+        const m = cols[idx].match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+        if (pontoDataOk(m[3], m[2], m[1]) && pontoHoraOk(m[4], m[5])) add(cols[0], `${m[3]}-${m[2]}-${m[1]}`, `${m[4]}:${m[5]}`, "tabulado", idx > 1 ? cols[1] : "");
+        else out.ignoradas++;
+        return;
+      }
+    }
+    // genérico
+    let data = null;
+    const br = l.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    const isoD = l.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (br && pontoDataOk(br[3], br[2], br[1])) data = `${br[3]}-${br[2]}-${br[1]}`;
+    else if (isoD && pontoDataOk(isoD[1], isoD[2], isoD[3])) data = `${isoD[1]}-${isoD[2]}-${isoD[3]}`;
+    const hm = l.match(/(?:^|[^\d])(\d{2}):(\d{2})(?::\d{2})?(?!\d)/);
+    const resto = l.replace(/\d{2}\/\d{2}\/\d{4}/, " ").replace(/\d{4}-\d{2}-\d{2}/, " ").replace(/\d{2}:\d{2}(?::\d{2})?/g, " ");
+    const idTok = resto.split(/[^0-9]+/).find((t) => t.length >= 4 && t.length <= 14);
+    if (data && hm && pontoHoraOk(hm[1], hm[2]) && idTok) add(idTok, data, `${hm[1]}:${hm[2]}`, "generico");
+    else out.ignoradas++;
+  });
+  const top = Object.entries(cont).sort((a, b) => b[1] - a[1])[0];
+  out.formato = !top || top[1] === 0 ? "não reconhecido" : { a1510: "AFD (Portaria 1510)", a671: "AFD (Portaria 671)", tabulado: "Registro de comparecimento (relógio)", generico: "Genérico (confira a prévia)" }[top[0]];
+  return out;
+}
+
+const pontoNorm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+// Sugere o colaborador pelo nome que vem do relógio: só devolve se houver UM candidato
+// (todas as palavras de um nome aparecem no outro, ignorando acento e maiúsculas).
+function pontoSugerirColab(nome, colaboradores) {
+  const a = pontoNorm(nome);
+  if (!a.length) return null;
+  const cand = colaboradores.filter((c) => {
+    const b = pontoNorm(c.nome);
+    if (!b.length) return false;
+    const sub = (x, y) => x.every((t) => y.includes(t));
+    return sub(a, b) || sub(b, a);
+  });
+  return cand.length === 1 ? cand[0].id : null;
+}
+
+function pontoMinutos(hhmm) {
+  return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+}
+
+// espelho do mês de um colaborador: um item por dia do mês
+function pontoEspelho(db, colaboradorId, ym) {
+  const p = db.ponto || {};
+  const ids = new Set(Object.entries(p.vinculos || {}).filter(([, c]) => c === colaboradorId).map(([i]) => i));
+  const porDia = {};
+  (p.batidas || []).forEach((b) => {
+    if (ids.has(b.ident) && b.data.startsWith(ym)) (porDia[b.data] = porDia[b.data] || []).push(b.hora);
+  });
+  const [y, m] = ym.split("-").map(Number);
+  const nDias = new Date(y, m, 0).getDate();
+  const hoje = todayISO();
+  const dias = [];
+  for (let d = 1; d <= nDias; d++) {
+    const data = `${ym}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(y, m - 1, d).getDay();
+    const horas = (porDia[data] || []).slice().sort();
+    let total = 0;
+    const mins = horas.map(pontoMinutos);
+    for (let i = 0; i + 1 < mins.length; i += 2) total += Math.max(0, mins[i + 1] - mins[i]);
+    const incompleto = horas.length % 2 === 1;
+    const util = dow >= 1 && dow <= 5;
+    let status = "ok";
+    if (!horas.length) status = data > hoje ? "futuro" : util ? "sem-registro" : "folga";
+    else if (incompleto) status = "incompleto";
+    dias.push({ data, dia: d, dow, horas, total, incompleto, status });
+  }
+  const trab = dias.filter((x) => x.horas.length);
+  const totalMin = trab.reduce((s, x) => s + x.total, 0);
+  return {
+    dias,
+    diasTrabalhados: trab.length,
+    totalMin,
+    mediaMin: trab.length ? Math.round(totalMin / trab.length) : 0,
+    incompletos: dias.filter((x) => x.status === "incompleto").length,
+    semRegistro: dias.filter((x) => x.status === "sem-registro").length,
+    temVinculo: ids.size > 0,
+  };
+}
+
+const PONTO_STATUS = {
+  ok: { label: "Registrado", tone: "positive" },
+  incompleto: { label: "Batida incompleta", tone: "negative" },
+  "sem-registro": { label: "Sem registro", tone: "brass" },
+  folga: { label: "Fim de semana", tone: null },
+  futuro: { label: "—", tone: null },
+};
+
+function PontoHorasChart({ dias }) {
+  const w = 720, h = 150, pad = 24;
+  const max = Math.max(...dias.map((d) => d.total), 8 * 60 + 60);
+  const bw = (w - pad * 2) / dias.length;
+  const y = (min) => h - 20 - (min / max) * (h - 40);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 150 }} role="img" aria-label="Horas trabalhadas por dia">
+      <line x1={pad} y1={y(480)} x2={w - pad} y2={y(480)} stroke="var(--brass)" strokeWidth="1" strokeDasharray="4 3" />
+      <text x={pad} y={y(480) - 4} fontSize="9" textAnchor="start" fill="var(--text-muted)">referência 8h</text>
+      {dias.map((d, i) => {
+        const x = pad + i * bw + 2;
+        const top = y(d.total);
+        return (
+          <g key={d.data}>
+            {d.total > 0 && <rect x={x} y={top} width={Math.max(2, bw - 4)} height={h - 20 - top} rx="2" fill={d.incompleto ? "var(--negative)" : "var(--positive)"} opacity="0.85" />}
+            {d.horas.length > 0 && d.total === 0 && <rect x={x} y={h - 22} width={Math.max(2, bw - 4)} height={2} fill="var(--negative)" />}
+            {(d.dia === 1 || d.dia % 5 === 0) && (
+              <text x={x + (bw - 4) / 2} y={h - 6} fontSize="9" textAnchor="middle" fill="var(--text-muted)">{d.dia}</text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function PontoImportar({ db, mutate }) {
+  const [texto, setTexto] = useState("");
+  const [nome, setNome] = useState("");
+  const [prev, setPrev] = useState(null);
+  const p = { batidas: [], vinculos: {}, arquivos: [], ...(db.ponto || {}) };
+
+  const analisar = (conteudo, nomeArq) => {
+    const res = parseAFD(conteudo);
+    const existentes = new Set(p.batidas.map((b) => `${b.ident}|${b.data}|${b.hora}`));
+    const novas = res.batidas.filter((b) => !existentes.has(`${b.ident}|${b.data}|${b.hora}`));
+    const datas = res.batidas.map((b) => b.data).sort();
+    const idents = [...new Set(res.batidas.map((b) => b.ident))];
+    const auto = {};
+    idents.forEach((i) => {
+      if (p.vinculos[i]) return;
+      const c = pontoSugerirColab(res.nomes[i], db.collaborators);
+      if (c) auto[i] = c;
+    });
+    setPrev({
+      auto,
+      nome: nomeArq || "colado manualmente",
+      res,
+      novas,
+      jaExistiam: res.batidas.length - novas.length,
+      de: datas[0],
+      ate: datas[datas.length - 1],
+      idents,
+      semVinculo: idents.filter((i) => !p.vinculos[i] && !auto[i]).length,
+    });
+  };
+
+  const onFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    setNome(f.name);
+    const r = new FileReader();
+    r.onload = () => { setTexto(String(r.result || "")); analisar(String(r.result || ""), f.name); };
+    r.readAsText(f);
+  };
+
+  const confirmar = () => {
+    if (!prev || !prev.novas.length) return;
+    const arquivoId = uid();
+    mutate((d) => {
+      const atual = { batidas: [], vinculos: {}, arquivos: [], ...(d.ponto || {}) };
+      return {
+        ...d,
+        ponto: {
+          ...atual,
+          batidas: [...atual.batidas, ...prev.novas.map((b) => ({ id: uid(), ...b, arquivoId }))],
+          nomes: { ...(atual.nomes || {}), ...Object.fromEntries(Object.entries(prev.res.nomes || {}).filter(([i]) => !(atual.nomes || {})[i])) },
+          vinculos: { ...atual.vinculos, ...Object.fromEntries(Object.entries(prev.auto || {}).filter(([i]) => !atual.vinculos[i])) },
+          arquivos: [
+            { id: arquivoId, nome: prev.nome, importadoEm: new Date().toISOString(), formato: prev.res.formato, lidas: prev.res.batidas.length, novas: prev.novas.length, de: prev.de, ate: prev.ate },
+            ...atual.arquivos,
+          ],
+        },
+      };
+    });
+    setPrev(null);
+    setTexto("");
+    setNome("");
+  };
+
+  const desfazer = (arq) =>
+    mutate((d) => {
+      const atual = { batidas: [], vinculos: {}, arquivos: [], ...(d.ponto || {}) };
+      return { ...d, ponto: { ...atual, batidas: atual.batidas.filter((b) => b.arquivoId !== arq.id), arquivos: atual.arquivos.filter((a) => a.id !== arq.id) } };
+    });
+
+  return (
+    <div>
+      <div className="panel">
+        <h3 className="panel-title">Importar arquivo do relógio de ponto</h3>
+        <p className="panel-note">
+          Envie o TXT que você copia do relógio (AFD). O sistema mostra uma prévia antes de gravar nada. Batidas que já foram importadas antes são ignoradas, então
+          pode subir o mesmo período mais de uma vez sem duplicar.
+        </p>
+        <div className="form-grid">
+          <Field label="Arquivo TXT do relógio">
+            <input type="file" accept=".txt,.afd,text/plain" onChange={onFile} />
+          </Field>
+          <Field label="Ou cole o conteúdo do arquivo" hint={nome ? `Arquivo lido: ${nome}` : null}>
+            <textarea className="input" rows={4} value={texto} onChange={(e) => { setTexto(e.target.value); setNome(""); }} placeholder="Cole aqui as linhas do TXT…" style={{ fontFamily: "monospace", fontSize: 12 }} />
+          </Field>
+        </div>
+        <div className="form-actions">
+          <Btn type="button" onClick={() => analisar(texto, nome)} disabled={!texto.trim()}>
+            <Search size={14} /> Ler e mostrar prévia
+          </Btn>
+        </div>
+      </div>
+
+      {prev && (
+        <div className="panel">
+          <h3 className="panel-title">Prévia da importação</h3>
+          {prev.res.batidas.length === 0 ? (
+            <EmptyState text="Não encontrei nenhuma batida nesse arquivo. Confira se é o TXT do relógio (AFD) e, se o formato for diferente, me envie um exemplo." />
+          ) : (
+            <>
+              <div className="preview-grid" style={{ fontSize: 13 }}>
+                <span>Formato reconhecido</span><span className="strong">{prev.res.formato}</span>
+                <span>Linhas no arquivo</span><span className="num">{prev.res.linhas}</span>
+                <span>Batidas lidas</span><span className="num">{prev.res.batidas.length}</span>
+                <span>Novas (serão gravadas)</span><span className="num positive">{prev.novas.length}</span>
+                <span>Já importadas antes (ignoradas)</span><span className="num">{prev.jaExistiam}</span>
+                <span>Linhas ignoradas (cabeçalho/outros tipos)</span><span className="num">{prev.res.ignoradas}</span>
+                <span>Período</span><span className="num">{fmtDateBR(prev.de)} a {fmtDateBR(prev.ate)}</span>
+                <span>Pessoas (identificadores)</span><span className="num">{prev.idents.length}</span>
+                <span>Vinculados automaticamente pelo nome</span><span className="num">{Object.keys(prev.auto || {}).length}</span>
+                <span>Ainda sem vínculo com colaborador</span><span className="num">{prev.semVinculo}</span>
+              </div>
+              {prev.res.formato.startsWith("Genérico") && (
+                <p className="panel-note">Formato não padrão: confira se as datas e horas da prévia estão corretas antes de confirmar.</p>
+              )}
+              <div className="form-actions">
+                <Btn type="button" onClick={confirmar} disabled={!prev.novas.length}>
+                  <Check size={14} /> Confirmar importação
+                </Btn>
+                <Btn type="button" variant="ghost" onClick={() => setPrev(null)}>Cancelar</Btn>
+              </div>
+              {!prev.novas.length && <p className="panel-note">Todas as batidas desse arquivo já estavam no sistema.</p>}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="panel">
+        <h3 className="panel-title">Importações feitas</h3>
+        {!p.arquivos.length ? (
+          <EmptyState text="Nenhum arquivo importado ainda." />
+        ) : (
+          <table className="table">
+            <thead>
+              <tr><th>Arquivo</th><th>Importado em</th><th>Formato</th><th>Período</th><th>Batidas novas</th><th></th></tr>
+            </thead>
+            <tbody>
+              {p.arquivos.map((a) => (
+                <tr key={a.id}>
+                  <td>{a.nome}</td>
+                  <td>{new Date(a.importadoEm).toLocaleString("pt-BR")}</td>
+                  <td>{a.formato}</td>
+                  <td>{fmtDateBR(a.de)} a {fmtDateBR(a.ate)}</td>
+                  <td className="num">{a.novas}</td>
+                  <td className="actions"><ConfirmDelete onConfirm={() => desfazer(a)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PontoVinculos({ db, mutate }) {
+  const p = { batidas: [], vinculos: {}, arquivos: [], nomes: {}, ...(db.ponto || {}) };
+  const contagem = {};
+  p.batidas.forEach((b) => { contagem[b.ident] = (contagem[b.ident] || 0) + 1; });
+  const idents = Object.keys(contagem).sort();
+  const setVinculo = (ident, colabId) =>
+    mutate((d) => {
+      const atual = { batidas: [], vinculos: {}, arquivos: [], ...(d.ponto || {}) };
+      const v = { ...atual.vinculos };
+      if (colabId) v[ident] = colabId;
+      else delete v[ident];
+      return { ...d, ponto: { ...atual, vinculos: v } };
+    });
+  return (
+    <div className="panel">
+      <h3 className="panel-title">Vínculo entre o relógio e os colaboradores</h3>
+      <p className="panel-note">
+        O relógio identifica cada pessoa por CPF, PIS ou matrícula. Escolha quem é quem uma única vez — as próximas importações já chegam vinculadas.
+        Uma pessoa pode ter mais de um identificador.
+      </p>
+      {!idents.length ? (
+        <EmptyState text="Importe um arquivo primeiro: os identificadores encontrados aparecem aqui." />
+      ) : (
+        <table className="table">
+          <thead>
+            <tr><th>Nº no relógio</th><th>Nome no relógio</th><th>Batidas</th><th>Colaborador</th></tr>
+          </thead>
+          <tbody>
+            {idents.map((i) => (
+              <tr key={i}>
+                <td className="num">{pontoIdentLabel(i)}</td>
+                <td>{(p.nomes || {})[i] || <span className="muted">—</span>}</td>
+                <td className="num">{contagem[i]}</td>
+                <td>
+                  <Select value={p.vinculos[i] || ""} onChange={(e) => setVinculo(i, e.target.value)}>
+                    <option value="">Não vinculado</option>
+                    {db.collaborators.map((c) => (
+                      <option key={c.id} value={c.id}>{c.nome}</option>
+                    ))}
+                  </Select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function PontoEspelho({ db, user, colaboradores }) {
+  const now = new Date();
+  const [ym, setYm] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+  const [colabId, setColabId] = useState(user.papel === "colaborador" ? user.colaboradorId : (colaboradores[0] && colaboradores[0].id) || "");
+  const sel = colaboradores.find((c) => c.id === colabId);
+  const esp = useMemo(() => (colabId ? pontoEspelho(db, colabId, ym) : null), [db.ponto, colabId, ym]);
+  const resumoEquipe = useMemo(() => colaboradores.map((c) => ({ c, e: pontoEspelho(db, c.id, ym) })), [db.ponto, colaboradores, ym]);
+  const p = db.ponto || {};
+  const naoVinc = new Set((p.batidas || []).filter((b) => !(p.vinculos || {})[b.ident]).map((b) => b.ident)).size;
+
+  const navegar = (dir) => {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, m - 1 + dir, 1);
+    setYm(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  const exportarResumo = () =>
+    downloadCSV(
+      `ponto-resumo-${ym}.csv`,
+      ["Colaborador", "Mês", "Dias com registro", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Dias com batida incompleta", "Dias úteis sem registro"],
+      resumoEquipe.map(({ c, e }) => [c.nome, monthLabel(ym), e.diasTrabalhados, fmtHM(e.totalMin), decHoras(e.totalMin), e.incompletos, e.semRegistro])
+    );
+  const exportarDetalhe = () =>
+    downloadCSV(
+      `ponto-espelho-${ym}.csv`,
+      ["Colaborador", "Data", "Dia da semana", "Batidas", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Situação"],
+      resumoEquipe.flatMap(({ c, e }) =>
+        e.dias.filter((d) => d.status !== "futuro").map((d) => [c.nome, fmtDateBR(d.data), PONTO_DIAS[d.dow], d.horas.join(" "), d.horas.length ? fmtHM(d.total) : "", d.horas.length ? decHoras(d.total) : "", PONTO_STATUS[d.status].label])
+      )
+    );
+
+  return (
+    <div>
+      {user.papel === "diretora" && naoVinc > 0 && (
+        <div className="alert-banner">
+          <AlertCircle size={16} />
+          <span>{naoVinc} identificador(es) do relógio ainda sem colaborador — veja a aba "Vínculos".</span>
+        </div>
+      )}
+      <div className="row-controls" style={{ marginBottom: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="icon-btn" title="Mês anterior" onClick={() => navegar(-1)}><ArrowUp size={14} style={{ transform: "rotate(-90deg)" }} /></button>
+        <span className="strong" style={{ minWidth: 80, textAlign: "center" }}>{monthLabel(ym)}</span>
+        <button className="icon-btn" title="Próximo mês" onClick={() => navegar(1)}><ArrowDown size={14} style={{ transform: "rotate(-90deg)" }} /></button>
+        {user.papel !== "colaborador" && (
+          <Select value={colabId} onChange={(e) => setColabId(e.target.value)}>
+            {colaboradores.map((c) => (<option key={c.id} value={c.id}>{c.nome}</option>))}
+          </Select>
+        )}
+        <span style={{ flex: 1 }} />
+        <Btn type="button" variant="ghost" onClick={exportarResumo}><Download size={14} /> Resumo do mês (CSV)</Btn>
+        <Btn type="button" variant="ghost" onClick={exportarDetalhe}><Download size={14} /> Espelho detalhado (CSV)</Btn>
+      </div>
+
+      {colaboradores.length > 1 && (
+        <div className="panel">
+          <h3 className="panel-title">Resumo do mês — {monthLabel(ym)}</h3>
+          <table className="table">
+            <thead>
+              <tr><th>Colaborador</th><th>Dias com registro</th><th>Horas trabalhadas</th><th>Média por dia</th><th>Batidas incompletas</th><th>Dias úteis sem registro</th></tr>
+            </thead>
+            <tbody>
+              {resumoEquipe.map(({ c, e }) => (
+                <tr key={c.id} className={c.id === colabId ? "row-selected" : ""} onClick={() => setColabId(c.id)} style={{ cursor: "pointer" }}>
+                  <td>{c.nome}{!e.temVinculo && <Tag>sem vínculo</Tag>}</td>
+                  <td className="num">{e.diasTrabalhados}</td>
+                  <td className="num strong">{fmtHM(e.totalMin)}</td>
+                  <td className="num">{e.diasTrabalhados ? fmtHM(e.mediaMin) : "—"}</td>
+                  <td className="num">{e.incompletos}</td>
+                  <td className="num">{e.semRegistro}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!sel || !esp ? (
+        <EmptyState text="Nenhum colaborador vinculado ao seu usuário." />
+      ) : (
+        <>
+          {!esp.temVinculo && <EmptyState text={`${sel.nome} ainda não está vinculado a nenhum identificador do relógio.${user.papel === "diretora" ? ' Use a aba "Vínculos".' : " Peça para a diretora vincular."}`} />}
+          <div className="cards-grid">
+            <div className="stat-card"><span className="stat-label">Dias com registro</span><span className="stat-value">{esp.diasTrabalhados}</span></div>
+            <div className="stat-card stat-card-highlight"><span className="stat-label">Horas trabalhadas no mês</span><span className="stat-value">{fmtHM(esp.totalMin)}</span></div>
+            <div className="stat-card"><span className="stat-label">Média por dia trabalhado</span><span className="stat-value">{esp.diasTrabalhados ? fmtHM(esp.mediaMin) : "—"}</span></div>
+            <div className="stat-card"><span className="stat-label">Batidas incompletas</span><span className="stat-value">{esp.incompletos}</span></div>
+            <div className="stat-card"><span className="stat-label">Dias úteis sem registro</span><span className="stat-value">{esp.semRegistro}</span></div>
+          </div>
+          <div className="panel">
+            <h3 className="panel-title">Horas por dia — {sel.nome}</h3>
+            <PontoHorasChart dias={esp.dias} />
+          </div>
+          <table className="table">
+            <thead>
+              <tr><th>Data</th><th>Dia</th><th>Batidas</th><th>Horas</th><th>Situação</th></tr>
+            </thead>
+            <tbody>
+              {esp.dias.map((d) => (
+                <tr key={d.data} style={d.dow === 0 || d.dow === 6 ? { background: "#FBFAF6" } : undefined}>
+                  <td>{fmtDateBR(d.data)}</td>
+                  <td>{PONTO_DIAS[d.dow]}</td>
+                  <td>{d.horas.length ? d.horas.map((h, i) => <span key={i} className="ponto-chip">{h}</span>) : <span className="muted">—</span>}</td>
+                  <td className="num strong">{d.horas.length ? fmtHM(d.total) : "—"}</td>
+                  <td>{d.status === "futuro" ? "" : <Tag tone={PONTO_STATUS[d.status].tone}>{PONTO_STATUS[d.status].label}</Tag>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="panel-note" style={{ marginTop: 12 }}>
+            Horas = soma dos pares entrada/saída do dia (1ª–2ª batida, 3ª–4ª…). Dia com número ímpar de batidas fica como "incompleto" e o último período não é somado.
+            "Sem registro" considera segunda a sexta, sem descontar feriados ou férias.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PontoPage({ db, mutate, user }) {
+  const isDiretora = user.papel === "diretora";
+  const [sub, setSub] = useState("espelho");
+  const team = teamColaboradorIds(db, user);
+  const colaboradores = team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id));
+  const tabs = [
+    { id: "espelho", label: "Espelho de ponto" },
+    ...(isDiretora ? [{ id: "importar", label: "Importar arquivo" }, { id: "vinculos", label: "Vínculos" }] : []),
+  ];
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <h2>Ponto eletrônico</h2>
+          <p className="muted">Batidas do relógio de ponto organizadas por colaborador, prontas para a contabilidade.</p>
+        </div>
+      </div>
+      {tabs.length > 1 && (
+        <div className="subtabs">
+          {tabs.map((t) => (
+            <button key={t.id} className={`subtab ${sub === t.id ? "subtab-active" : ""}`} onClick={() => setSub(t.id)}>{t.label}</button>
+          ))}
+        </div>
+      )}
+      {sub === "espelho" && <PontoEspelho db={db} user={user} colaboradores={colaboradores} />}
+      {sub === "importar" && isDiretora && <PontoImportar db={db} mutate={mutate} />}
+      {sub === "vinculos" && isDiretora && <PontoVinculos db={db} mutate={mutate} />}
+    </div>
+  );
+}
+
 // Navegação agrupada em seções: "Financeiro" (operação/receita da empresa) e
 // "Time" (esforço, ranking, gamificação e performance dos consultores) —
 // mantém os dois assuntos visualmente separados na barra lateral.
@@ -6259,6 +7185,7 @@ function navFor(user) {
     { id: "ranking", label: "Ranking", icon: Trophy },
   ];
   if (user.papel !== "colaborador") time.push({ id: "performance", label: "Performance do time", icon: TrendingUp });
+  time.push({ id: "ponto", label: "Ponto eletrônico", icon: Clock });
 
   const roleta = [{ id: "roleta", label: "Roleta de prêmios", icon: Gift }];
 
@@ -6553,7 +7480,8 @@ export default function App({ authEmail, onSignOut } = {}) {
         {page === "operacoes" && <OperacoesPage db={db} mutate={mutate} user={currentUser} />}
         {page === "agenda" && <AgendaPage db={db} mutate={mutate} user={currentUser} />}
         {page === "esforco" && <EsforcoPage db={db} mutate={mutate} user={currentUser} />}
-        {page === "ranking" && <RankingPage db={db} user={currentUser} />}
+        {page === "ranking" && <RankingPage db={db} mutate={mutate} user={currentUser} />}
+        {page === "ponto" && <PontoPage db={db} mutate={mutate} user={currentUser} />}
         {page === "roleta" && <RoletaPage db={db} mutate={mutate} user={currentUser} />}
         {page === "links" && <LinksPage db={db} mutate={mutate} user={currentUser} />}
         {page === "relatorios" && <RelatoriosPage db={db} user={currentUser} />}
@@ -6618,6 +7546,9 @@ export function AppStyles() {
       .stat-label { font-size: 12px; color: var(--text-muted); }
       .stat-value { font-family: Georgia, serif; font-size: 21px; font-weight: 500; }
       .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: var(--shadow-sm); }
+      /* painel logo após uma tabela solta (ex.: Relatórios de desempenho): respiro entre os blocos */
+      .table + .panel, .empty + .panel, .empty-state + .panel { margin-top: 24px; }
+      .ponto-chip { display: inline-block; font-variant-numeric: tabular-nums; font-size: 12px; padding: 2px 8px; margin: 0 4px 2px 0; border-radius: 999px; background: #F1ECDD; border: 1px solid var(--line); }
       .panel-title { font-family: Georgia, serif; font-size: 17px; font-weight: 500; margin: 0 0 12px; }
       .panel-note { font-size: 12.5px; color: var(--text-muted); margin: 6px 0 14px; }
       .subtabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
