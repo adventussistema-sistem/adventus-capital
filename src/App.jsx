@@ -88,7 +88,7 @@ const emptyDb = () => ({
   creditos: [],
   caixa: { saldoAbertura: 0, mesAbertura: "" },
   // ponto eletrônico: batidas importadas do relógio, vínculo identificador→colaborador e log de importações
-  ponto: { batidas: [], vinculos: {}, arquivos: [], nomes: {} },
+  ponto: { batidas: [], vinculos: {}, arquivos: [], nomes: {}, feriados: [], eventos: [], ajustes: [], desconsideradas: {}, jornada: { padrao: [0, 528, 528, 528, 528, 528, 0], porColab: {} } },
 });
 
 // Motor de pontuação (esforço + resultado), inspirado no "Jogo de Metas" — cada indicador tem:
@@ -6740,34 +6740,98 @@ function pontoMinutos(hhmm) {
   return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 }
 
+/* ---- Etapa 2: jornada, feriados, eventos, ajustes manuais e banco de horas ----
+   db.ponto (além de batidas/vinculos/arquivos/nomes):
+   - jornada: { padrao: [dom..sáb em minutos], porColab: { colaboradorId: [...] } }  (padrão 44h = seg–sex 8h48)
+   - feriados: [{ id, data, nome }]                       → esperado do dia = 0 para todos
+   - eventos: [{ id, colaboradorId, data, tipo, ... }]
+       tipo "horas": inicio/fim — período trabalhado que o relógio não registrou (permanência, visita externa)
+       tipo "abono": minutos (0 = dia inteiro) — reduz o esperado (atestado, falta/atraso justificado)
+   - ajustes: [{ id, colaboradorId, data, hora, motivo, por, em }]   → batida manual (entra no cálculo)
+   - desconsideradas: { batidaId: { motivo, por, em } }              → batida do relógio ignorada no cálculo
+   As batidas importadas nunca são alteradas: ajustes e desconsideradas ficam em registros separados (auditoria). */
+const PONTO_JORNADA_PADRAO = [0, 528, 528, 528, 528, 528, 0];
+const pontoBase = (p) => ({
+  batidas: [], vinculos: {}, arquivos: [], nomes: {},
+  feriados: [], eventos: [], ajustes: [], desconsideradas: {},
+  ...(p || {}),
+  jornada: { padrao: PONTO_JORNADA_PADRAO.slice(), porColab: {}, ...((p && p.jornada) || {}) },
+});
+const pontoMut = (mutate, fn) => mutate((d) => ({ ...d, ponto: fn(pontoBase(d.ponto)) }));
+const pontoPad = (n) => String(n).padStart(2, "0");
+const pontoIso = (d) => `${d.getFullYear()}-${pontoPad(d.getMonth() + 1)}-${pontoPad(d.getDate())}`;
+const pontoHoje = () => pontoIso(new Date());
+const pontoAdd = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); return pontoIso(new Date(y, m - 1, d + n)); };
+const pontoDow = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).getDay(); };
+const minToHM = (min) => `${pontoPad(Math.floor(min / 60))}:${pontoPad(min % 60)}`;
+const hmToMin = (s) => (/^\d{2}:\d{2}$/.test(s || "") ? pontoMinutos(s) : null);
+const fmtSaldo = (min, ascii) => (min < 0 ? (ascii ? "-" : "−") : "+") + fmtHM(Math.abs(min));
+const PONTO_DIAS_LONGO = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+
+function pontoCtx(db, colaboradorId) {
+  const p = pontoBase(db.ponto);
+  const ids = new Set(Object.entries(p.vinculos).filter(([, c]) => c === colaboradorId).map(([i]) => i));
+  const relogio = {}, manuais = {}, eventos = {}, feriados = {};
+  p.batidas.forEach((b) => { if (ids.has(b.ident)) (relogio[b.data] = relogio[b.data] || []).push(b); });
+  p.ajustes.forEach((a) => { if (a.colaboradorId === colaboradorId) (manuais[a.data] = manuais[a.data] || []).push(a); });
+  p.eventos.forEach((e) => { if (e.colaboradorId === colaboradorId) (eventos[e.data] = eventos[e.data] || []).push(e); });
+  p.feriados.forEach((f) => { feriados[f.data] = f; });
+  return { relogio, manuais, eventos, feriados, desc: p.desconsideradas, jornada: p.jornada.porColab[colaboradorId] || p.jornada.padrao, temVinculo: ids.size > 0 };
+}
+
+// tudo o que o sistema calcula para um dia de um colaborador
+function pontoDiaInfo(ctx, data, hoje) {
+  const dow = pontoDow(data);
+  const registros = [];
+  (ctx.relogio[data] || []).forEach((b) => registros.push({ id: b.id, hora: b.hora, origem: "relogio", desc: ctx.desc[b.id] || null }));
+  (ctx.manuais[data] || []).forEach((a) => registros.push({ id: a.id, hora: a.hora, origem: "manual", motivo: a.motivo, por: a.por, em: a.em, desc: null }));
+  registros.sort((a, b) => a.hora.localeCompare(b.hora) || (a.origem === "relogio" ? -1 : 1));
+  const horas = registros.filter((r) => !r.desc).map((r) => r.hora);
+  const mins = horas.map(pontoMinutos);
+  let total = 0;
+  for (let i = 0; i + 1 < mins.length; i += 2) total += Math.max(0, mins[i + 1] - mins[i]);
+  const incompleto = horas.length % 2 === 1;
+  const eventos = ctx.eventos[data] || [];
+  const feriado = ctx.feriados[data] || null;
+  const base = ctx.jornada[dow] || 0;
+  const extraMin = eventos.filter((e) => e.tipo === "horas").reduce((s, e) => s + Math.max(0, pontoMinutos(e.fim) - pontoMinutos(e.inicio)), 0);
+  const abonoMin = eventos.filter((e) => e.tipo === "abono").reduce((s, e) => s + (e.minutos > 0 ? e.minutos : base), 0);
+  const esperado = feriado ? 0 : Math.max(0, base - abonoMin);
+  const trabalhado = total + extraMin;
+  let status = "ok";
+  if (!horas.length && !extraMin) {
+    if (feriado) status = "feriado";
+    else if (data > hoje) status = "futuro";
+    else if (data === hoje) status = "hoje";
+    else if (base > 0 && abonoMin >= base) status = "abonado";
+    else status = base > 0 ? "sem-registro" : "folga";
+  } else if (incompleto) status = "incompleto";
+  return {
+    data, dia: Number(data.slice(8, 10)), dow, registros, horas, total, incompleto, eventos, feriado,
+    base, esperado, extraMin, abonoMin, trabalhado, saldo: trabalhado - esperado, conta: data < hoje, status,
+  };
+}
+
+function pontoNotas(d) {
+  const n = [];
+  if (d.feriado) n.push(`Feriado: ${d.feriado.nome}`);
+  d.registros.filter((r) => r.origem === "manual").forEach((r) => n.push(`Batida manual ${r.hora} (${r.motivo})`));
+  d.registros.filter((r) => r.desc).forEach((r) => n.push(`Batida ${r.hora} desconsiderada (${r.desc.motivo})`));
+  d.eventos.forEach((e) => n.push(e.tipo === "horas" ? `Horas ${e.inicio}-${e.fim} (${e.motivo})` : `Abono ${e.minutos > 0 ? fmtHM(e.minutos) : "dia inteiro"} (${e.motivo})`));
+  return n;
+}
+
 // espelho do mês de um colaborador: um item por dia do mês
 function pontoEspelho(db, colaboradorId, ym) {
-  const p = db.ponto || {};
-  const ids = new Set(Object.entries(p.vinculos || {}).filter(([, c]) => c === colaboradorId).map(([i]) => i));
-  const porDia = {};
-  (p.batidas || []).forEach((b) => {
-    if (ids.has(b.ident) && b.data.startsWith(ym)) (porDia[b.data] = porDia[b.data] || []).push(b.hora);
-  });
+  const ctx = pontoCtx(db, colaboradorId);
+  const hoje = pontoHoje();
   const [y, m] = ym.split("-").map(Number);
   const nDias = new Date(y, m, 0).getDate();
-  const hoje = todayISO();
   const dias = [];
-  for (let d = 1; d <= nDias; d++) {
-    const data = `${ym}-${String(d).padStart(2, "0")}`;
-    const dow = new Date(y, m - 1, d).getDay();
-    const horas = (porDia[data] || []).slice().sort();
-    let total = 0;
-    const mins = horas.map(pontoMinutos);
-    for (let i = 0; i + 1 < mins.length; i += 2) total += Math.max(0, mins[i + 1] - mins[i]);
-    const incompleto = horas.length % 2 === 1;
-    const util = dow >= 1 && dow <= 5;
-    let status = "ok";
-    if (!horas.length) status = data > hoje ? "futuro" : util ? "sem-registro" : "folga";
-    else if (incompleto) status = "incompleto";
-    dias.push({ data, dia: d, dow, horas, total, incompleto, status });
-  }
-  const trab = dias.filter((x) => x.horas.length);
-  const totalMin = trab.reduce((s, x) => s + x.total, 0);
+  for (let d = 1; d <= nDias; d++) dias.push(pontoDiaInfo(ctx, `${ym}-${pontoPad(d)}`, hoje));
+  const trab = dias.filter((x) => x.horas.length || x.extraMin);
+  const totalMin = dias.reduce((s, x) => s + x.trabalhado, 0);
+  const contados = dias.filter((x) => x.conta);
   return {
     dias,
     diasTrabalhados: trab.length,
@@ -6775,7 +6839,38 @@ function pontoEspelho(db, colaboradorId, ym) {
     mediaMin: trab.length ? Math.round(totalMin / trab.length) : 0,
     incompletos: dias.filter((x) => x.status === "incompleto").length,
     semRegistro: dias.filter((x) => x.status === "sem-registro").length,
-    temVinculo: ids.size > 0,
+    esperadoMin: contados.reduce((s, x) => s + x.esperado, 0),
+    saldoMin: contados.reduce((s, x) => s + x.saldo, 0),
+    temVinculo: ctx.temVinculo,
+  };
+}
+
+// banco de horas num período (semanas de segunda a domingo; conta até ontem)
+function pontoBanco(db, colaboradorId, de, ate) {
+  const ctx = pontoCtx(db, colaboradorId);
+  const hoje = pontoHoje();
+  const fim = ate < hoje ? ate : pontoAdd(hoje, -1);
+  const semanas = {};
+  let n = 0;
+  for (let d = de; d <= fim && n < 1100; d = pontoAdd(d, 1), n++) {
+    const info = pontoDiaInfo(ctx, d, hoje);
+    const seg = pontoAdd(d, -((info.dow + 6) % 7));
+    const s = (semanas[seg] = semanas[seg] || { inicio: seg, fim: pontoAdd(seg, 6), esperado: 0, trabalhado: 0, incompletos: 0, semRegistro: 0 });
+    s.esperado += info.esperado;
+    s.trabalhado += info.trabalhado;
+    if (info.status === "incompleto") s.incompletos++;
+    if (info.status === "sem-registro") s.semRegistro++;
+  }
+  let acum = 0;
+  const lista = Object.values(semanas).sort((a, b) => a.inicio.localeCompare(b.inicio)).map((s) => {
+    const saldo = s.trabalhado - s.esperado;
+    acum += saldo;
+    return { ...s, saldo, acumulado: acum };
+  });
+  const tot = lista.reduce((t, s) => ({ esperado: t.esperado + s.esperado, trabalhado: t.trabalhado + s.trabalhado, incompletos: t.incompletos + s.incompletos, semRegistro: t.semRegistro + s.semRegistro }), { esperado: 0, trabalhado: 0, incompletos: 0, semRegistro: 0 });
+  return {
+    semanas: lista, ...tot, saldo: tot.trabalhado - tot.esperado, ate: fim,
+    metaSemanal: ctx.jornada.reduce((s, v) => s + v, 0), temVinculo: ctx.temVinculo,
   };
 }
 
@@ -6783,13 +6878,16 @@ const PONTO_STATUS = {
   ok: { label: "Registrado", tone: "positive" },
   incompleto: { label: "Batida incompleta", tone: "negative" },
   "sem-registro": { label: "Sem registro", tone: "brass" },
-  folga: { label: "Fim de semana", tone: null },
+  feriado: { label: "Feriado", tone: "brass" },
+  abonado: { label: "Abonado", tone: "positive" },
+  hoje: { label: "Hoje", tone: null },
+  folga: { label: "Sem expediente", tone: null },
   futuro: { label: "—", tone: null },
 };
 
 function PontoHorasChart({ dias }) {
   const w = 720, h = 150, pad = 24;
-  const max = Math.max(...dias.map((d) => d.total), 8 * 60 + 60);
+  const max = Math.max(...dias.map((d) => d.trabalhado), 8 * 60 + 60);
   const bw = (w - pad * 2) / dias.length;
   const y = (min) => h - 20 - (min / max) * (h - 40);
   return (
@@ -6798,11 +6896,11 @@ function PontoHorasChart({ dias }) {
       <text x={pad} y={y(480) - 4} fontSize="9" textAnchor="start" fill="var(--text-muted)">referência 8h</text>
       {dias.map((d, i) => {
         const x = pad + i * bw + 2;
-        const top = y(d.total);
+        const top = y(d.trabalhado);
         return (
           <g key={d.data}>
-            {d.total > 0 && <rect x={x} y={top} width={Math.max(2, bw - 4)} height={h - 20 - top} rx="2" fill={d.incompleto ? "var(--negative)" : "var(--positive)"} opacity="0.85" />}
-            {d.horas.length > 0 && d.total === 0 && <rect x={x} y={h - 22} width={Math.max(2, bw - 4)} height={2} fill="var(--negative)" />}
+            {d.trabalhado > 0 && <rect x={x} y={top} width={Math.max(2, bw - 4)} height={h - 20 - top} rx="2" fill={d.incompleto ? "var(--negative)" : "var(--positive)"} opacity="0.85" />}
+            {d.horas.length > 0 && d.trabalhado === 0 && <rect x={x} y={h - 22} width={Math.max(2, bw - 4)} height={2} fill="var(--negative)" />}
             {(d.dia === 1 || d.dia % 5 === 0) && (
               <text x={x + (bw - 4) / 2} y={h - 6} fontSize="9" textAnchor="middle" fill="var(--text-muted)">{d.dia}</text>
             )}
@@ -7018,34 +7116,236 @@ function PontoVinculos({ db, mutate }) {
   );
 }
 
-function PontoEspelho({ db, user, colaboradores }) {
+function PontoCalendario({ esp, ym, selecionada, onSelect }) {
+  const [y, m] = ym.split("-").map(Number);
+  const primeiro = new Date(y, m - 1, 1).getDay();
+  const celulas = [...Array(primeiro).fill(null), ...esp.dias];
+  return (
+    <div className="panel">
+      <h3 className="panel-title">Calendário — clique num dia para ver e ajustar</h3>
+      <div className="pcal">
+        {PONTO_DIAS.map((d) => (<div key={d} className="pcal-head">{d}</div>))}
+        {celulas.map((d, i) =>
+          !d ? (
+            <div key={`v${i}`} className="pcal-cell pcal-vazio" />
+          ) : (
+            <button
+              key={d.data}
+              type="button"
+              data-dia={d.data}
+              className={`pcal-cell ${selecionada === d.data ? "pcal-sel" : ""} ${d.status === "folga" || d.status === "feriado" ? "pcal-off" : ""}`}
+              onClick={() => onSelect(d.data)}
+            >
+              <span className="pcal-dia">{d.dia}</span>
+              {(d.horas.length > 0 || d.extraMin > 0) && <span className="pcal-h">{fmtHM(d.trabalhado)}</span>}
+              {d.conta && (d.esperado > 0 || d.trabalhado > 0) && (
+                <span className={d.saldo >= 0 ? "pcal-pos" : "pcal-neg"}>{fmtSaldo(d.saldo)}</span>
+              )}
+              <span className="pcal-marcas">
+                {d.feriado && <span title={d.feriado.nome}>Feriado</span>}
+                {d.incompleto && <span className="pcal-neg" title="Batida incompleta">!</span>}
+                {d.registros.some((r) => r.origem === "manual" || r.desc) && <span title="Ajuste manual">✎</span>}
+                {d.eventos.length > 0 && <span title="Evento registrado">●</span>}
+              </span>
+            </button>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PontoMotivoBtn({ label, onConfirm }) {
+  const [aberto, setAberto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  if (!aberto) return <button className="btn btn-ghost btn-sm" onClick={() => setAberto(true)}>{label}</button>;
+  return (
+    <span className="confirm-row">
+      <TextInput placeholder="Motivo (obrigatório)" value={motivo} onChange={(e) => setMotivo(e.target.value)} style={{ minWidth: 170 }} />
+      <button className="btn btn-primary btn-sm" disabled={!motivo.trim()} onClick={() => { onConfirm(motivo.trim()); setAberto(false); setMotivo(""); }}>
+        <Check size={13} />
+      </button>
+      <button className="btn btn-ghost btn-sm" onClick={() => setAberto(false)}>
+        <X size={13} />
+      </button>
+    </span>
+  );
+}
+
+function PontoDiaPanel({ db, mutate, user, colab, dia }) {
+  const pode = user.papel === "diretora";
+  const [hora, setHora] = useState("");
+  const [motivoB, setMotivoB] = useState("");
+  const [tipo, setTipo] = useState("horas");
+  const [ini, setIni] = useState("");
+  const [fim, setFim] = useState("");
+  const [min, setMin] = useState("");
+  const [motivoE, setMotivoE] = useState("");
+  const [erro, setErro] = useState("");
+  const quem = user.nome || user.usuario || "";
+  const agora = () => new Date().toISOString();
+  const quando = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR") : "");
+
+  const addBatida = () => {
+    if (hmToMin(hora) === null || !motivoB.trim()) return setErro("Informe o horário e o motivo da batida manual.");
+    pontoMut(mutate, (b) => ({ ...b, ajustes: [...b.ajustes, { id: uid(), colaboradorId: colab.id, data: dia.data, hora, motivo: motivoB.trim(), por: quem, em: agora() }] }));
+    setHora(""); setMotivoB(""); setErro("");
+  };
+  const addEvento = () => {
+    if (!motivoE.trim()) return setErro("Informe o motivo do evento.");
+    let ev = { id: uid(), colaboradorId: colab.id, data: dia.data, tipo, motivo: motivoE.trim(), por: quem, em: agora() };
+    if (tipo === "horas") {
+      if (hmToMin(ini) === null || hmToMin(fim) === null || hmToMin(fim) <= hmToMin(ini)) return setErro("Informe início e fim válidos (o fim deve ser depois do início).");
+      ev = { ...ev, inicio: ini, fim };
+    } else {
+      const mm = min === "" ? 0 : Math.round(Number(min));
+      if (Number.isNaN(mm) || mm < 0) return setErro("Minutos inválidos (deixe em branco para abonar o dia inteiro).");
+      ev = { ...ev, minutos: mm };
+    }
+    pontoMut(mutate, (b) => ({ ...b, eventos: [...b.eventos, ev] }));
+    setIni(""); setFim(""); setMin(""); setMotivoE(""); setErro("");
+  };
+  const desconsiderar = (id, motivo) => pontoMut(mutate, (b) => ({ ...b, desconsideradas: { ...b.desconsideradas, [id]: { motivo, por: quem, em: agora() } } }));
+  const restaurar = (id) => pontoMut(mutate, (b) => { const d = { ...b.desconsideradas }; delete d[id]; return { ...b, desconsideradas: d }; });
+
+  return (
+    <div className="panel" data-testid="dia-panel">
+      <h3 className="panel-title">{PONTO_DIAS_LONGO[dia.dow]}, {fmtDateBR(dia.data)} — {colab.nome}</h3>
+      <div className="preview-grid" style={{ fontSize: 13, marginBottom: 12 }}>
+        <span>Jornada esperada</span><span className="num">{fmtHM(dia.esperado)}{dia.feriado ? ` · feriado: ${dia.feriado.nome}` : dia.abonoMin ? " (com abono)" : ""}</span>
+        <span>Horas trabalhadas</span><span className="num">{fmtHM(dia.trabalhado)}</span>
+        <span>Saldo do dia</span><span className={`num ${dia.saldo >= 0 ? "positive" : "negative"}`}>{dia.conta ? fmtSaldo(dia.saldo) : "—"}</span>
+      </div>
+
+      <h4 style={{ margin: "6px 0" }}>Batidas do dia</h4>
+      {!dia.registros.length ? (
+        <p className="muted" style={{ marginTop: 0 }}>Nenhuma batida neste dia.</p>
+      ) : (
+        <table className="table">
+          <thead><tr><th>Hora</th><th>Origem</th><th>Situação</th><th>Detalhe</th>{pode && <th></th>}</tr></thead>
+          <tbody>
+            {dia.registros.map((r) => (
+              <tr key={r.id} style={r.desc ? { opacity: 0.6 } : undefined}>
+                <td className="num" style={r.desc ? { textDecoration: "line-through" } : undefined}>{r.hora}</td>
+                <td><Tag tone={r.origem === "manual" ? "brass" : null}>{r.origem === "manual" ? "Manual" : "Relógio"}</Tag></td>
+                <td>{r.desc ? "Desconsiderada" : "Considerada"}</td>
+                <td className="muted" style={{ fontSize: 12 }}>
+                  {r.origem === "manual" ? `${r.motivo} — ${r.por || ""} ${quando(r.em)}` : r.desc ? `${r.desc.motivo} — ${r.desc.por || ""} ${quando(r.desc.em)}` : ""}
+                </td>
+                {pode && (
+                  <td className="actions">
+                    {r.origem === "manual" ? (
+                      <ConfirmDelete onConfirm={() => pontoMut(mutate, (b) => ({ ...b, ajustes: b.ajustes.filter((a) => a.id !== r.id) }))} />
+                    ) : r.desc ? (
+                      <button className="btn btn-ghost btn-sm" onClick={() => restaurar(r.id)}>Restaurar</button>
+                    ) : (
+                      <PontoMotivoBtn label="Desconsiderar" onConfirm={(m) => desconsiderar(r.id, m)} />
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h4 style={{ margin: "14px 0 6px" }}>Eventos do dia</h4>
+      {!dia.eventos.length ? (
+        <p className="muted" style={{ marginTop: 0 }}>Nenhum evento registrado.</p>
+      ) : (
+        <table className="table">
+          <thead><tr><th>Evento</th><th>Detalhe</th><th>Motivo</th><th>Registrado por</th>{pode && <th></th>}</tr></thead>
+          <tbody>
+            {dia.eventos.map((e) => (
+              <tr key={e.id}>
+                <td>{e.tipo === "horas" ? "Horas trabalhadas fora do relógio" : "Abono"}</td>
+                <td className="num">{e.tipo === "horas" ? `${e.inicio} às ${e.fim} (${fmtHM(pontoMinutos(e.fim) - pontoMinutos(e.inicio))})` : e.minutos > 0 ? fmtHM(e.minutos) : "dia inteiro"}</td>
+                <td>{e.motivo}</td>
+                <td className="muted" style={{ fontSize: 12 }}>{e.por} {quando(e.em)}</td>
+                {pode && <td className="actions"><ConfirmDelete onConfirm={() => pontoMut(mutate, (b) => ({ ...b, eventos: b.eventos.filter((x) => x.id !== e.id) }))} /></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {pode ? (
+        <div className="two-col" style={{ marginTop: 14 }}>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Ajuste manual: adicionar batida</h4>
+            <p className="panel-note" style={{ marginTop: 0 }}>Use quando o colaborador esqueceu de bater. A batida entra no cálculo e fica marcada como manual.</p>
+            <div className="form-grid">
+              <Field label="Horário"><TextInput type="time" data-f="hora-manual" value={hora} onChange={(e) => setHora(e.target.value)} /></Field>
+              <Field label="Motivo"><TextInput data-f="motivo-manual" value={motivoB} onChange={(e) => setMotivoB(e.target.value)} placeholder="Ex.: esqueceu de bater a saída" /></Field>
+            </div>
+            <div className="form-actions"><Btn type="button" onClick={addBatida}><Plus size={14} /> Adicionar batida</Btn></div>
+          </div>
+          <div>
+            <h4 style={{ margin: "0 0 6px" }}>Registrar evento do dia</h4>
+            <p className="panel-note" style={{ marginTop: 0 }}>Justifica horas fora do relógio (permanência, visita externa) ou abona falta, atraso ou saída antecipada.</p>
+            <div className="form-grid">
+              <Field label="Tipo">
+                <Select data-f="tipo-evento" value={tipo} onChange={(e) => setTipo(e.target.value)}>
+                  <option value="horas">Horas trabalhadas fora do relógio</option>
+                  <option value="abono">Abono (atestado, falta ou atraso justificado)</option>
+                </Select>
+              </Field>
+              {tipo === "horas" ? (
+                <>
+                  <Field label="Início"><TextInput type="time" data-f="ev-ini" value={ini} onChange={(e) => setIni(e.target.value)} /></Field>
+                  <Field label="Fim"><TextInput type="time" data-f="ev-fim" value={fim} onChange={(e) => setFim(e.target.value)} /></Field>
+                </>
+              ) : (
+                <Field label="Minutos a abonar" hint="Em branco = dia inteiro"><TextInput type="number" min="0" data-f="ev-min" value={min} onChange={(e) => setMin(e.target.value)} /></Field>
+              )}
+              <Field label="Motivo"><TextInput data-f="motivo-evento" value={motivoE} onChange={(e) => setMotivoE(e.target.value)} placeholder="Ex.: reunião com cliente" /></Field>
+            </div>
+            <div className="form-actions"><Btn type="button" data-f="add-evento" onClick={addEvento}><Plus size={14} /> Registrar evento</Btn></div>
+          </div>
+        </div>
+      ) : (
+        <p className="panel-note">Ajustes e eventos são lançados pela Diretora.</p>
+      )}
+      {erro && <p className="negative" style={{ marginTop: 8 }}>{erro}</p>}
+    </div>
+  );
+}
+
+function PontoEspelho({ db, mutate, user, colaboradores }) {
   const now = new Date();
   const [ym, setYm] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   const [colabId, setColabId] = useState(user.papel === "colaborador" ? user.colaboradorId : (colaboradores[0] && colaboradores[0].id) || "");
+  const [diaSel, setDiaSel] = useState("");
   const sel = colaboradores.find((c) => c.id === colabId);
   const esp = useMemo(() => (colabId ? pontoEspelho(db, colabId, ym) : null), [db.ponto, colabId, ym]);
   const resumoEquipe = useMemo(() => colaboradores.map((c) => ({ c, e: pontoEspelho(db, c.id, ym) })), [db.ponto, colaboradores, ym]);
   const p = db.ponto || {};
   const naoVinc = new Set((p.batidas || []).filter((b) => !(p.vinculos || {})[b.ident]).map((b) => b.ident)).size;
+  const diaAtual = esp && diaSel ? esp.dias.find((d) => d.data === diaSel) : null;
 
   const navegar = (dir) => {
     const [y, m] = ym.split("-").map(Number);
     const d = new Date(y, m - 1 + dir, 1);
     setYm(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    setDiaSel("");
   };
 
   const exportarResumo = () =>
     downloadCSV(
       `ponto-resumo-${ym}.csv`,
-      ["Colaborador", "Mês", "Dias com registro", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Dias com batida incompleta", "Dias úteis sem registro"],
-      resumoEquipe.map(({ c, e }) => [c.nome, monthLabel(ym), e.diasTrabalhados, fmtHM(e.totalMin), decHoras(e.totalMin), e.incompletos, e.semRegistro])
+      ["Colaborador", "Mês", "Dias com registro", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Dias com batida incompleta", "Dias úteis sem registro", "Horas esperadas (h:min)", "Saldo do mês (h:min)"],
+      resumoEquipe.map(({ c, e }) => [c.nome, monthLabel(ym), e.diasTrabalhados, fmtHM(e.totalMin), decHoras(e.totalMin), e.incompletos, e.semRegistro, fmtHM(e.esperadoMin), fmtSaldo(e.saldoMin, true)])
     );
   const exportarDetalhe = () =>
     downloadCSV(
       `ponto-espelho-${ym}.csv`,
-      ["Colaborador", "Data", "Dia da semana", "Batidas", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Situação"],
+      ["Colaborador", "Data", "Dia da semana", "Batidas", "Horas trabalhadas (h:min)", "Horas trabalhadas (decimal)", "Situação", "Horas esperadas (h:min)", "Saldo do dia (h:min)", "Ajustes e eventos"],
       resumoEquipe.flatMap(({ c, e }) =>
-        e.dias.filter((d) => d.status !== "futuro").map((d) => [c.nome, fmtDateBR(d.data), PONTO_DIAS[d.dow], d.horas.join(" "), d.horas.length ? fmtHM(d.total) : "", d.horas.length ? decHoras(d.total) : "", PONTO_STATUS[d.status].label])
+        e.dias.filter((d) => d.status !== "futuro").map((d) => [
+          c.nome, fmtDateBR(d.data), PONTO_DIAS[d.dow], d.horas.join(" "),
+          d.horas.length || d.extraMin ? fmtHM(d.trabalhado) : "", d.horas.length || d.extraMin ? decHoras(d.trabalhado) : "",
+          PONTO_STATUS[d.status].label, fmtHM(d.esperado), d.conta ? fmtSaldo(d.saldo, true) : "", pontoNotas(d).join(" | "),
+        ])
       )
     );
 
@@ -7062,7 +7362,7 @@ function PontoEspelho({ db, user, colaboradores }) {
         <span className="strong" style={{ minWidth: 80, textAlign: "center" }}>{monthLabel(ym)}</span>
         <button className="icon-btn" title="Próximo mês" onClick={() => navegar(1)}><ArrowDown size={14} style={{ transform: "rotate(-90deg)" }} /></button>
         {user.papel !== "colaborador" && (
-          <Select value={colabId} onChange={(e) => setColabId(e.target.value)}>
+          <Select value={colabId} onChange={(e) => { setColabId(e.target.value); setDiaSel(""); }}>
             {colaboradores.map((c) => (<option key={c.id} value={c.id}>{c.nome}</option>))}
           </Select>
         )}
@@ -7076,15 +7376,16 @@ function PontoEspelho({ db, user, colaboradores }) {
           <h3 className="panel-title">Resumo do mês — {monthLabel(ym)}</h3>
           <table className="table">
             <thead>
-              <tr><th>Colaborador</th><th>Dias com registro</th><th>Horas trabalhadas</th><th>Média por dia</th><th>Batidas incompletas</th><th>Dias úteis sem registro</th></tr>
+              <tr><th>Colaborador</th><th>Dias com registro</th><th>Horas trabalhadas</th><th>Média por dia</th><th>Saldo do mês</th><th>Batidas incompletas</th><th>Dias úteis sem registro</th></tr>
             </thead>
             <tbody>
               {resumoEquipe.map(({ c, e }) => (
-                <tr key={c.id} className={c.id === colabId ? "row-selected" : ""} onClick={() => setColabId(c.id)} style={{ cursor: "pointer" }}>
+                <tr key={c.id} className={c.id === colabId ? "row-selected" : ""} onClick={() => { setColabId(c.id); setDiaSel(""); }} style={{ cursor: "pointer" }}>
                   <td>{c.nome}{!e.temVinculo && <Tag>sem vínculo</Tag>}</td>
                   <td className="num">{e.diasTrabalhados}</td>
                   <td className="num strong">{fmtHM(e.totalMin)}</td>
                   <td className="num">{e.diasTrabalhados ? fmtHM(e.mediaMin) : "—"}</td>
+                  <td className={`num ${e.saldoMin >= 0 ? "positive" : "negative"}`}>{e.temVinculo ? fmtSaldo(e.saldoMin) : "—"}</td>
                   <td className="num">{e.incompletos}</td>
                   <td className="num">{e.semRegistro}</td>
                 </tr>
@@ -7103,35 +7404,277 @@ function PontoEspelho({ db, user, colaboradores }) {
             <div className="stat-card"><span className="stat-label">Dias com registro</span><span className="stat-value">{esp.diasTrabalhados}</span></div>
             <div className="stat-card stat-card-highlight"><span className="stat-label">Horas trabalhadas no mês</span><span className="stat-value">{fmtHM(esp.totalMin)}</span></div>
             <div className="stat-card"><span className="stat-label">Média por dia trabalhado</span><span className="stat-value">{esp.diasTrabalhados ? fmtHM(esp.mediaMin) : "—"}</span></div>
+            <div className="stat-card"><span className="stat-label">Saldo do mês (até ontem)</span><span className="stat-value">{fmtSaldo(esp.saldoMin)}</span></div>
             <div className="stat-card"><span className="stat-label">Batidas incompletas</span><span className="stat-value">{esp.incompletos}</span></div>
             <div className="stat-card"><span className="stat-label">Dias úteis sem registro</span><span className="stat-value">{esp.semRegistro}</span></div>
           </div>
+
+          <PontoCalendario esp={esp} ym={ym} selecionada={diaSel} onSelect={setDiaSel} />
+          {diaAtual ? (
+            <PontoDiaPanel key={`${colabId}-${diaAtual.data}`} db={db} mutate={mutate} user={user} colab={sel} dia={diaAtual} />
+          ) : (
+            <p className="panel-note">Clique em um dia do calendário para ver as batidas, justificar eventos e fazer ajustes.</p>
+          )}
+
           <div className="panel">
             <h3 className="panel-title">Horas por dia — {sel.nome}</h3>
             <PontoHorasChart dias={esp.dias} />
           </div>
           <table className="table">
             <thead>
-              <tr><th>Data</th><th>Dia</th><th>Batidas</th><th>Horas</th><th>Situação</th></tr>
+              <tr><th>Data</th><th>Dia</th><th>Batidas</th><th>Horas</th><th>Esperado</th><th>Saldo</th><th>Situação</th></tr>
             </thead>
             <tbody>
               {esp.dias.map((d) => (
-                <tr key={d.data} style={d.dow === 0 || d.dow === 6 ? { background: "#FBFAF6" } : undefined}>
+                <tr key={d.data} style={d.base === 0 ? { background: "#FBFAF6" } : undefined}>
                   <td>{fmtDateBR(d.data)}</td>
                   <td>{PONTO_DIAS[d.dow]}</td>
-                  <td>{d.horas.length ? d.horas.map((h, i) => <span key={i} className="ponto-chip">{h}</span>) : <span className="muted">—</span>}</td>
-                  <td className="num strong">{d.horas.length ? fmtHM(d.total) : "—"}</td>
+                  <td>
+                    {d.registros.filter((r) => !r.desc).length ? (
+                      d.registros.filter((r) => !r.desc).map((r) => (
+                        <span key={r.id} className={`ponto-chip ${r.origem === "manual" ? "ponto-chip-manual" : ""}`} title={r.origem === "manual" ? `Manual: ${r.motivo}` : ""}>{r.hora}{r.origem === "manual" ? " ✎" : ""}</span>
+                      ))
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                    {d.extraMin > 0 && <span className="ponto-chip ponto-chip-manual" title="Horas justificadas por evento">+{fmtHM(d.extraMin)} evento</span>}
+                  </td>
+                  <td className="num strong">{d.horas.length || d.extraMin ? fmtHM(d.trabalhado) : "—"}</td>
+                  <td className="num">{d.esperado ? fmtHM(d.esperado) : "—"}</td>
+                  <td className={`num ${d.saldo >= 0 ? "positive" : "negative"}`}>{d.conta && (d.esperado || d.trabalhado) ? fmtSaldo(d.saldo) : "—"}</td>
                   <td>{d.status === "futuro" ? "" : <Tag tone={PONTO_STATUS[d.status].tone}>{PONTO_STATUS[d.status].label}</Tag>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <p className="panel-note" style={{ marginTop: 12 }}>
-            Horas = soma dos pares entrada/saída do dia (1ª–2ª batida, 3ª–4ª…). Dia com número ímpar de batidas fica como "incompleto" e o último período não é somado.
-            "Sem registro" considera segunda a sexta, sem descontar feriados ou férias.
+            Horas = soma dos pares entrada/saída do dia (1ª–2ª batida, 3ª–4ª…) mais as horas de eventos registrados. Dia com número ímpar de batidas fica como "incompleto" e o último
+            período não é somado — corrija com um ajuste manual. A jornada esperada vem da aba "Jornada e feriados".
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+function PontoBancoHoras({ db, user, colaboradores }) {
+  const hoje = pontoHoje();
+  const [de, setDe] = useState(`${hoje.slice(0, 7)}-01`);
+  const [ate, setAte] = useState(pontoAdd(hoje, -1));
+  const [colabId, setColabId] = useState(user.papel === "colaborador" ? user.colaboradorId : (colaboradores[0] && colaboradores[0].id) || "");
+  const preset = (v) => {
+    const y = Number(hoje.slice(0, 4)), m = Number(hoje.slice(5, 7));
+    if (v === "mes") { setDe(`${hoje.slice(0, 7)}-01`); setAte(pontoAdd(hoje, -1)); }
+    if (v === "anterior") { setDe(pontoIso(new Date(y, m - 2, 1))); setAte(pontoIso(new Date(y, m - 1, 0))); }
+    if (v === "ano") { setDe(`${y}-01-01`); setAte(pontoAdd(hoje, -1)); }
+  };
+  const linhas = useMemo(() => colaboradores.map((c) => ({ c, b: pontoBanco(db, c.id, de, ate) })), [db.ponto, colaboradores, de, ate]);
+  const sel = linhas.find((l) => l.c.id === colabId);
+  const b = sel && sel.b;
+  const sinal = (n) => (n >= 0 ? "positive" : "negative");
+
+  const exportar = () =>
+    downloadCSV(
+      `banco-de-horas-${de}-a-${ate}.csv`,
+      ["Colaborador", "Semana (início)", "Semana (fim)", "Horas esperadas (h:min)", "Horas trabalhadas (h:min)", "Saldo da semana (h:min)", "Saldo acumulado (h:min)", "Batidas incompletas", "Dias úteis sem registro"],
+      linhas.flatMap(({ c, b: x }) => x.semanas.map((s) => [c.nome, fmtDateBR(s.inicio), fmtDateBR(s.fim), fmtHM(s.esperado), fmtHM(s.trabalhado), fmtSaldo(s.saldo, true), fmtSaldo(s.acumulado, true), s.incompletos, s.semRegistro]))
+    );
+  const exportarResumo = () =>
+    downloadCSV(
+      `banco-de-horas-resumo-${de}-a-${ate}.csv`,
+      ["Colaborador", "Período", "Horas esperadas (h:min)", "Horas trabalhadas (h:min)", "Saldo (h:min)", "Saldo (decimal)", "Batidas incompletas", "Dias úteis sem registro"],
+      linhas.map(({ c, b: x }) => [c.nome, `${fmtDateBR(de)} a ${fmtDateBR(x.ate)}`, fmtHM(x.esperado), fmtHM(x.trabalhado), fmtSaldo(x.saldo, true), (x.saldo < 0 ? "-" : "") + decHoras(Math.abs(x.saldo)), x.incompletos, x.semRegistro])
+    );
+
+  return (
+    <div>
+      <div className="row-controls" style={{ marginBottom: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        {user.papel !== "colaborador" && (
+          <Select value={colabId} onChange={(e) => setColabId(e.target.value)}>
+            {colaboradores.map((c) => (<option key={c.id} value={c.id}>{c.nome}</option>))}
+          </Select>
+        )}
+        <span className="muted">De</span>
+        <TextInput type="date" data-f="banco-de" value={de} onChange={(e) => e.target.value && setDe(e.target.value)} />
+        <span className="muted">até</span>
+        <TextInput type="date" data-f="banco-ate" value={ate} onChange={(e) => e.target.value && setAte(e.target.value)} />
+        <Select defaultValue="" onChange={(e) => { if (e.target.value) preset(e.target.value); e.target.value = ""; }}>
+          <option value="">Atalhos de período…</option>
+          <option value="mes">Mês atual</option>
+          <option value="anterior">Mês anterior</option>
+          <option value="ano">Ano até ontem</option>
+        </Select>
+        <span style={{ flex: 1 }} />
+        <Btn type="button" variant="ghost" onClick={exportarResumo}><Download size={14} /> Resumo (CSV)</Btn>
+        <Btn type="button" variant="ghost" onClick={exportar}><Download size={14} /> Semana a semana (CSV)</Btn>
+      </div>
+
+      {!b ? (
+        <EmptyState text="Nenhum colaborador vinculado ao seu usuário." />
+      ) : (
+        <>
+          {!b.temVinculo && <EmptyState text={`${sel.c.nome} ainda não está vinculado a um identificador do relógio.`} />}
+          <div className="cards-grid">
+            <div className="stat-card"><span className="stat-label">Meta semanal de jornada</span><span className="stat-value">{fmtHM(b.metaSemanal)}</span></div>
+            <div className="stat-card"><span className="stat-label">Horas esperadas no período</span><span className="stat-value">{fmtHM(b.esperado)}</span></div>
+            <div className="stat-card"><span className="stat-label">Horas trabalhadas</span><span className="stat-value">{fmtHM(b.trabalhado)}</span></div>
+            <div className="stat-card stat-card-highlight"><span className="stat-label">Saldo do banco de horas</span><span className="stat-value" data-testid="banco-saldo">{fmtSaldo(b.saldo)}</span></div>
+            <div className="stat-card"><span className="stat-label">Pendências (podem distorcer o saldo)</span><span className="stat-value">{b.incompletos + b.semRegistro}</span></div>
+          </div>
+          <div className="panel">
+            <h3 className="panel-title">Semana a semana — {sel.c.nome}</h3>
+            {!b.semanas.length ? (
+              <EmptyState text="Nenhum dia no período (o cálculo vai até ontem)." />
+            ) : (
+              <table className="table" data-testid="banco-semanas">
+                <thead>
+                  <tr><th>Semana</th><th>Esperado</th><th>Trabalhado</th><th>Saldo da semana</th><th>Saldo acumulado</th><th>Batidas incompletas</th><th>Dias úteis sem registro</th></tr>
+                </thead>
+                <tbody>
+                  {b.semanas.map((s) => (
+                    <tr key={s.inicio}>
+                      <td>{fmtDateBR(s.inicio).slice(0, 5)} a {fmtDateBR(s.fim).slice(0, 5)}</td>
+                      <td className="num">{fmtHM(s.esperado)}</td>
+                      <td className="num">{fmtHM(s.trabalhado)}</td>
+                      <td className={`num ${sinal(s.saldo)}`}>{fmtSaldo(s.saldo)}</td>
+                      <td className={`num strong ${sinal(s.acumulado)}`}>{fmtSaldo(s.acumulado)}</td>
+                      <td className="num">{s.incompletos}</td>
+                      <td className="num">{s.semRegistro}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr><td>Total</td><td className="num">{fmtHM(b.esperado)}</td><td className="num">{fmtHM(b.trabalhado)}</td><td className={`num ${sinal(b.saldo)}`}>{fmtSaldo(b.saldo)}</td><td></td><td className="num">{b.incompletos}</td><td className="num">{b.semRegistro}</td></tr>
+                </tfoot>
+              </table>
+            )}
+          </div>
+          {colaboradores.length > 1 && (
+            <div className="panel">
+              <h3 className="panel-title">Equipe no período</h3>
+              <table className="table">
+                <thead><tr><th>Colaborador</th><th>Esperado</th><th>Trabalhado</th><th>Saldo</th><th>Pendências</th></tr></thead>
+                <tbody>
+                  {linhas.map(({ c, b: x }) => (
+                    <tr key={c.id} className={c.id === colabId ? "row-selected" : ""} onClick={() => setColabId(c.id)} style={{ cursor: "pointer" }}>
+                      <td>{c.nome}</td>
+                      <td className="num">{fmtHM(x.esperado)}</td>
+                      <td className="num">{fmtHM(x.trabalhado)}</td>
+                      <td className={`num strong ${sinal(x.saldo)}`}>{x.temVinculo ? fmtSaldo(x.saldo) : "—"}</td>
+                      <td className="num">{x.incompletos + x.semRegistro}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="panel-note">
+            Saldo = horas trabalhadas − horas esperadas, de segunda a domingo, contando até ontem. A jornada esperada vem da aba "Jornada e feriados" (padrão 44h semanais) e já desconta feriados e abonos.
+            Dia sem registro em dia de expediente conta como falta, e dia com batida incompleta soma só os pares — por isso "Pendências" mostra o que precisa de ajuste no calendário. As regras de
+            compensação do banco (prazo, limites, adicional) ficam a cargo da contabilidade.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PontoJornada({ db, mutate, colaboradores }) {
+  const p = pontoBase(db.ponto);
+  const [fData, setFData] = useState("");
+  const [fNome, setFNome] = useState("");
+  const [ano, setAno] = useState(String(new Date().getFullYear()));
+  const setDia = (colabId, i, valor) => {
+    const min = hmToMin(valor);
+    if (min === null) return;
+    pontoMut(mutate, (b) => {
+      if (!colabId) return { ...b, jornada: { ...b.jornada, padrao: b.jornada.padrao.map((v, j) => (j === i ? min : v)) } };
+      const atual = b.jornada.porColab[colabId] || b.jornada.padrao;
+      return { ...b, jornada: { ...b.jornada, porColab: { ...b.jornada.porColab, [colabId]: atual.map((v, j) => (j === i ? min : v)) } } };
+    });
+  };
+  const personalizar = (colabId) => pontoMut(mutate, (b) => ({ ...b, jornada: { ...b.jornada, porColab: { ...b.jornada.porColab, [colabId]: b.jornada.padrao.slice() } } }));
+  const voltarPadrao = (colabId) => pontoMut(mutate, (b) => { const pc = { ...b.jornada.porColab }; delete pc[colabId]; return { ...b, jornada: { ...b.jornada, porColab: pc } }; });
+  const addFeriado = () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fData) || !fNome.trim()) return;
+    pontoMut(mutate, (b) => (b.feriados.some((f) => f.data === fData) ? b : { ...b, feriados: [...b.feriados, { id: uid(), data: fData, nome: fNome.trim() }] }));
+    setFData(""); setFNome("");
+  };
+  const nacionais = [["01-01", "Confraternização Universal"], ["04-21", "Tiradentes"], ["05-01", "Dia do Trabalho"], ["09-07", "Independência do Brasil"], ["10-12", "Nossa Senhora Aparecida"], ["11-02", "Finados"], ["11-15", "Proclamação da República"], ["11-20", "Consciência Negra"], ["12-25", "Natal"]];
+  const addNacionais = () => {
+    if (!/^\d{4}$/.test(ano)) return;
+    pontoMut(mutate, (b) => {
+      const existentes = new Set(b.feriados.map((f) => f.data));
+      return { ...b, feriados: [...b.feriados, ...nacionais.map(([md, nome]) => ({ id: uid(), data: `${ano}-${md}`, nome })).filter((f) => !existentes.has(f.data))] };
+    });
+  };
+  const linha = (colabId, nome, jornada, personalizada) => (
+    <tr key={colabId || "padrao"}>
+      <td>{nome}</td>
+      {jornada.map((min, i) => (
+        <td key={i}>
+          <input type="time" className="input" style={{ minWidth: 0, width: 84, padding: "6px 6px", fontSize: 12.5 }} data-f={`jor-${colabId || "padrao"}-${i}`} disabled={colabId && !personalizada} value={minToHM(min)} onChange={(e) => setDia(colabId, i, e.target.value)} />
+        </td>
+      ))}
+      <td className="num strong">{fmtHM(jornada.reduce((s, v) => s + v, 0))}</td>
+      <td>
+        {colabId &&
+          (personalizada ? (
+            <button className="btn btn-ghost btn-sm" onClick={() => voltarPadrao(colabId)}>Voltar ao padrão</button>
+          ) : (
+            <button className="btn btn-ghost btn-sm" onClick={() => personalizar(colabId)}>Personalizar</button>
+          ))}
+      </td>
+    </tr>
+  );
+  const feriadosOrdenados = p.feriados.slice().sort((a, b) => a.data.localeCompare(b.data));
+
+  return (
+    <div>
+      <div className="panel">
+        <h3 className="panel-title">Jornada semanal esperada</h3>
+        <p className="panel-note">
+          Horas esperadas por dia da semana. O padrão cadastrado é de 44h semanais (segunda a sexta, 8h48 por dia). É a base do banco de horas: faltaram ou sobraram horas em relação a esta jornada.
+          Use "Personalizar" para quem tem jornada diferente.
+        </p>
+        <div style={{ overflowX: "auto" }}>
+          <table className="table">
+            <thead><tr><th>Quem</th>{PONTO_DIAS.map((d) => (<th key={d}>{d}</th>))}<th>Semana</th><th></th></tr></thead>
+            <tbody>
+              {linha("", "Padrão (todos)", p.jornada.padrao, true)}
+              {colaboradores.map((c) => linha(c.id, c.nome, p.jornada.porColab[c.id] || p.jornada.padrao, !!p.jornada.porColab[c.id]))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="panel">
+        <h3 className="panel-title">Feriados e dias sem expediente</h3>
+        <p className="panel-note">Nesses dias a jornada esperada é zero para todos. Cadastre também os feriados estaduais e municipais — o botão abaixo adiciona só os nacionais de data fixa.</p>
+        <div className="inline-form">
+          <TextInput type="date" data-f="fer-data" value={fData} onChange={(e) => setFData(e.target.value)} />
+          <TextInput placeholder="Nome (ex.: Aniversário da cidade)" data-f="fer-nome" value={fNome} onChange={(e) => setFNome(e.target.value)} />
+          <Btn type="button" data-f="fer-add" onClick={addFeriado}><Plus size={14} /> Adicionar</Btn>
+          <TextInput type="number" style={{ maxWidth: 90 }} value={ano} onChange={(e) => setAno(e.target.value)} />
+          <Btn type="button" variant="ghost" data-f="fer-nacionais" onClick={addNacionais}>Adicionar feriados nacionais do ano</Btn>
+        </div>
+        {!feriadosOrdenados.length ? (
+          <EmptyState text="Nenhum feriado cadastrado." />
+        ) : (
+          <table className="table">
+            <thead><tr><th>Data</th><th>Dia</th><th>Nome</th><th></th></tr></thead>
+            <tbody>
+              {feriadosOrdenados.map((f) => (
+                <tr key={f.id}>
+                  <td>{fmtDateBR(f.data)}</td>
+                  <td>{PONTO_DIAS[pontoDow(f.data)]}</td>
+                  <td>{f.nome}</td>
+                  <td className="actions"><ConfirmDelete onConfirm={() => pontoMut(mutate, (b) => ({ ...b, feriados: b.feriados.filter((x) => x.id !== f.id) }))} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -7143,24 +7686,25 @@ function PontoPage({ db, mutate, user }) {
   const colaboradores = team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id));
   const tabs = [
     { id: "espelho", label: "Espelho de ponto" },
-    ...(isDiretora ? [{ id: "importar", label: "Importar arquivo" }, { id: "vinculos", label: "Vínculos" }] : []),
+    { id: "banco", label: "Banco de horas" },
+    ...(isDiretora ? [{ id: "jornada", label: "Jornada e feriados" }, { id: "importar", label: "Importar arquivo" }, { id: "vinculos", label: "Vínculos" }] : []),
   ];
   return (
     <div>
       <div className="page-header">
         <div>
           <h2>Ponto eletrônico</h2>
-          <p className="muted">Batidas do relógio de ponto organizadas por colaborador, prontas para a contabilidade.</p>
+          <p className="muted">Batidas do relógio de ponto organizadas por colaborador, com calendário, banco de horas e relatório para a contabilidade.</p>
         </div>
       </div>
-      {tabs.length > 1 && (
-        <div className="subtabs">
-          {tabs.map((t) => (
-            <button key={t.id} className={`subtab ${sub === t.id ? "subtab-active" : ""}`} onClick={() => setSub(t.id)}>{t.label}</button>
-          ))}
-        </div>
-      )}
-      {sub === "espelho" && <PontoEspelho db={db} user={user} colaboradores={colaboradores} />}
+      <div className="subtabs">
+        {tabs.map((t) => (
+          <button key={t.id} className={`subtab ${sub === t.id ? "subtab-active" : ""}`} onClick={() => setSub(t.id)}>{t.label}</button>
+        ))}
+      </div>
+      {sub === "espelho" && <PontoEspelho db={db} mutate={mutate} user={user} colaboradores={colaboradores} />}
+      {sub === "banco" && <PontoBancoHoras db={db} user={user} colaboradores={colaboradores} />}
+      {sub === "jornada" && isDiretora && <PontoJornada db={db} mutate={mutate} colaboradores={colaboradores} />}
       {sub === "importar" && isDiretora && <PontoImportar db={db} mutate={mutate} />}
       {sub === "vinculos" && isDiretora && <PontoVinculos db={db} mutate={mutate} />}
     </div>
@@ -7548,6 +8092,20 @@ export function AppStyles() {
       .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: var(--shadow-sm); }
       /* painel logo após uma tabela solta (ex.: Relatórios de desempenho): respiro entre os blocos */
       .table + .panel, .empty + .panel, .empty-state + .panel { margin-top: 24px; }
+      .ponto-chip-manual { background: #F6E9CC; border-color: var(--brass); }
+      .pcal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+      .pcal-head { font-size: 11.5px; color: var(--text-muted); text-align: center; padding-bottom: 2px; }
+      .pcal-cell { text-align: left; padding: 6px 8px; min-height: 74px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font: inherit; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+      .pcal-cell:hover { border-color: var(--brass); }
+      .pcal-sel { border-color: var(--brass); box-shadow: 0 0 0 2px rgba(176,141,82,0.28); }
+      .pcal-off { background: #FBFAF6; color: var(--text-muted); }
+      .pcal-vazio { visibility: hidden; border: none; cursor: default; }
+      .pcal-dia { font-size: 12px; font-weight: 600; }
+      .pcal-h { font-size: 12px; font-variant-numeric: tabular-nums; }
+      .pcal-pos { color: var(--positive); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .pcal-neg { color: var(--negative); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .pcal-marcas { display: flex; gap: 5px; font-size: 10px; color: var(--text-muted); margin-top: auto; }
+      @media (max-width: 720px) { .pcal-cell { min-height: 56px; padding: 4px; } .pcal-h { display: none; } }
       .ponto-chip { display: inline-block; font-variant-numeric: tabular-nums; font-size: 12px; padding: 2px 8px; margin: 0 4px 2px 0; border-radius: 999px; background: #F1ECDD; border: 1px solid var(--line); }
       .panel-title { font-family: Georgia, serif; font-size: 17px; font-weight: 500; margin: 0 0 12px; }
       .panel-note { font-size: 12.5px; color: var(--text-muted); margin: 6px 0 14px; }
