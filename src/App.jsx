@@ -1558,8 +1558,41 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     imposto: editingHon?.imposto ?? "",
     colaboradorId: editingHon?.colaboradorId || (user.papel === "lider" || user.papel === "colaborador" ? user.colaboradorId : ""),
     liderId: editingHon?.liderId || (user.papel === "lider" ? user.colaboradorId : user.papel === "colaborador" ? ownRecord?.liderId || "" : ""),
+    // Crédito próprio (sem honorário do cliente) + pagamento do cliente
+    creditoProprio:
+      editingOp?.creditoProprio ??
+      (!!editingOp && normTxt(editingHon?.modalidade) === "credito proprio" && !(Number(editingHon?.valorHonorario) > 0)),
+    formaPagamento: editingOp?.formaPagamento || "prazo",
+    valorTotalCliente: editingOp?.valorTotalCliente ?? "",
+    nParcelas: editingOp?.recebiveis?.length > 1 ? editingOp.recebiveis.length : 2,
+    primeiraData: editingOp?.recebiveis?.[0]?.vencimento || "",
+    recebiveis: editingOp?.recebiveis || [],
   }));
   const [impostoTocado, setImpostoTocado] = useState(!!editingHon);
+
+  // gera as parcelas a partir do total, da forma de pagamento e da 1ª data (mantém as já pagas)
+  const regerarRecebiveis = (f) => {
+    const n = f.formaPagamento === "parcelado" ? f.nParcelas : 1;
+    const primeira = f.formaPagamento === "avista" ? f.primeiraData || f.dataCredito : f.primeiraData;
+    return { ...f, recebiveis: gerarRecebiveis({ total: f.valorTotalCliente, n, primeiraData: primeira, anteriores: f.recebiveis }) };
+  };
+  const updatePagto = (patch) => setForm((prev) => regerarRecebiveis({ ...prev, ...patch }));
+  const setParcela = (n, patch) =>
+    setForm((prev) => ({ ...prev, recebiveis: prev.recebiveis.map((p) => (p.n === n ? { ...p, ...patch } : p)) }));
+  const onInstituicaoChange = (id) => {
+    const inst = db.institutions.find((b) => b.id === id);
+    setForm((prev) => {
+      const next = { ...prev, instituicaoId: id };
+      if (!editingOp && ehInstituicaoAdventus(inst) && !prev.creditoProprio) {
+        next.creditoProprio = true;
+        if (!prev.modalidade) next.modalidade = "Crédito Próprio";
+      }
+      return next;
+    });
+  };
+  const somaRecebiveis = round2((form.recebiveis || []).reduce((s, p) => s + (Number(p.valor) || 0), 0));
+  const principalForm = Number(form.valorLiberado) || Number(form.valorAprovado) || 0;
+  const ganhoCreditoProprio = round2((Number(form.valorTotalCliente) || 0) - principalForm);
 
   const recalcParceiro = (merged) => {
     const partner = db.partners.find((p) => p.id === merged.parceiroId);
@@ -1612,32 +1645,39 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       className="panel form-grid"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!form.numero || !form.instituicaoId || !form.clienteId || !form.colaboradorId) return;
+        const cp = !!form.creditoProprio;
+        if (!form.numero || !form.instituicaoId || !form.clienteId) return;
+        if (!cp && !form.colaboradorId) return;
+        if (cp && Number(form.valorTotalCliente) > 0 && form.recebiveis.length === 0) return;
         onSave({
           operacao: {
             numero: form.numero,
             instituicaoId: form.instituicaoId,
             clienteId: form.clienteId,
             valorAprovado: Number(form.valorAprovado) || 0,
-            valorAReceber: Number(form.valorAReceber) || 0,
-            dataRecebimentoBanco: form.dataRecebimentoBanco || null,
-            recebidoBanco: !!form.recebidoBanco,
-            tacAtivo: !!form.tacAtivo,
-            tacValorGeral: Number(form.tacValorGeral) || 0,
+            valorAReceber: cp ? 0 : Number(form.valorAReceber) || 0,
+            dataRecebimentoBanco: cp ? null : form.dataRecebimentoBanco || null,
+            recebidoBanco: cp ? false : !!form.recebidoBanco,
+            tacAtivo: cp ? false : !!form.tacAtivo,
+            tacValorGeral: cp ? 0 : Number(form.tacValorGeral) || 0,
             tacParceiroNome: form.tacParceiroNome || "DMX",
             tacPctAdventus: Number(form.tacPctAdventus) || 0,
+            creditoProprio: cp,
+            formaPagamento: cp ? form.formaPagamento : null,
+            valorTotalCliente: cp ? Number(form.valorTotalCliente) || 0 : 0,
+            recebiveis: cp ? form.recebiveis : [],
           },
           honorario: {
             clienteId: form.clienteId,
-            modalidade: form.modalidade,
-            parceiroId: form.parceiroId,
+            modalidade: cp ? form.modalidade || "Crédito Próprio" : form.modalidade,
+            parceiroId: cp ? "" : form.parceiroId,
             dataCredito: form.dataCredito,
             valorLiberado: Number(form.valorLiberado) || 0,
-            valorHonorario: Number(form.valorHonorario) || 0,
-            valorParceiro: Number(form.valorParceiro) || 0,
-            imposto: Number(form.imposto) || 0,
+            valorHonorario: cp ? 0 : Number(form.valorHonorario) || 0,
+            valorParceiro: cp ? 0 : Number(form.valorParceiro) || 0,
+            imposto: cp ? 0 : Number(form.imposto) || 0,
             colaboradorId: form.colaboradorId,
-            liderId: form.liderId,
+            liderId: cp ? "" : form.liderId,
           },
         });
       }}
@@ -1647,7 +1687,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         <TextInput value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} required />
       </Field>
       <Field label="Instituição financeira">
-        <Select value={form.instituicaoId} onChange={(e) => setForm({ ...form, instituicaoId: e.target.value })} required>
+        <Select value={form.instituicaoId} onChange={(e) => onInstituicaoChange(e.target.value)} required>
           <option value="">Selecione</option>
           {db.institutions.map((b) => (
             <option key={b.id} value={b.id}>{b.nome}</option>
@@ -1665,6 +1705,18 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       <Field label="Valor aprovado (cliente)">
         <MoneyInput value={form.valorAprovado} onChange={(e) => onValorAprovadoChange(e.target.value)} />
       </Field>
+      <Field label="Tipo da operação" hint="Operação feita pela própria Adventus, sem outra instituição financeira">
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={!!form.creditoProprio}
+            onChange={(e) => setForm({ ...form, creditoProprio: e.target.checked, modalidade: e.target.checked && !form.modalidade ? "Crédito Próprio" : form.modalidade })}
+          />
+          <span style={{ fontSize: 13, color: "var(--text)" }}>Crédito próprio (sem honorário do cliente)</span>
+        </label>
+      </Field>
+      {!form.creditoProprio && (
+        <>
       <Field label="Valor a receber (instituição → Adventus)" hint={form.valorAprovado ? `${fmtPct(percentualReceita)} do valor aprovado` : null}>
         <MoneyInput value={form.valorAReceber} onChange={(e) => setForm({ ...form, valorAReceber: e.target.value })} />
       </Field>
@@ -1677,11 +1729,16 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           <span style={{ fontSize: 13, color: "var(--text)" }}>Sim, já caiu na conta</span>
         </label>
       </Field>
+        </>
+      )}
 
-      <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>Honorário do cliente</h3>
+      <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>
+        {form.creditoProprio ? "Dados do crédito" : "Honorário do cliente"}
+      </h3>
       <Field label="Modalidade (tipo de operação)">
         <TextInput value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} placeholder="Ex.: Capital de Giro, Desconto de Recebíveis…" />
       </Field>
+      {!form.creditoProprio && (
       <Field
         label="Parceiro estratégico"
         hint={selectedPartner ? `Repasse: ${fmtPct(selectedPartner.percentual)} sobre o honorário pago pelo cliente` : null}
@@ -1693,12 +1750,15 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           ))}
         </Select>
       </Field>
+      )}
       <Field label="Data do crédito">
         <TextInput type="date" value={form.dataCredito} onChange={(e) => setForm({ ...form, dataCredito: e.target.value })} />
       </Field>
       <Field label="Valor liberado da operação">
         <MoneyInput value={form.valorLiberado} onChange={(e) => updateForm({ valorLiberado: e.target.value })} />
       </Field>
+      {!form.creditoProprio && (
+        <>
       <Field label="Valor do honorário do cliente (bruto)" hint={form.valorLiberado ? `${fmtPct(pctHonorario)} do valor liberado` : null}>
         <MoneyInput value={form.valorHonorario} onChange={(e) => updateForm({ valorHonorario: e.target.value })} />
       </Field>
@@ -1717,14 +1777,17 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           onChange={(e) => { setImpostoTocado(true); setForm({ ...form, imposto: e.target.value }); }}
         />
       </Field>
-      <Field label="Colaborador responsável">
-        <Select value={form.colaboradorId} onChange={(e) => setForm({ ...form, colaboradorId: e.target.value })} required disabled={user.papel === "colaborador"}>
-          <option value="">Selecione</option>
+        </>
+      )}
+      <Field label={form.creditoProprio ? "Colaborador responsável (opcional)" : "Colaborador responsável"}>
+        <Select value={form.colaboradorId} onChange={(e) => setForm({ ...form, colaboradorId: e.target.value })} required={!form.creditoProprio} disabled={user.papel === "colaborador"}>
+          <option value="">{form.creditoProprio ? "Nenhum" : "Selecione"}</option>
           {colaboradorOptions.map((c) => (
             <option key={c.id} value={c.id}>{c.nome}</option>
           ))}
         </Select>
       </Field>
+      {!form.creditoProprio && (
       <Field label="Líder responsável (comissão fixa de 3%)">
         <Select value={form.liderId} onChange={(e) => setForm({ ...form, liderId: e.target.value })} disabled={isSelfScoped}>
           <option value="">Nenhum</option>
@@ -1733,7 +1796,80 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           ))}
         </Select>
       </Field>
+      )}
 
+      {form.creditoProprio && (
+        <>
+          <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>Pagamento do cliente</h3>
+          <p className="panel-note" style={{ gridColumn: "1 / -1", margin: 0 }}>
+            Informe quanto o cliente vai pagar de volta e quando. Cada parcela aparece sozinha na Agenda de recebimentos e no fluxo de caixa.
+          </p>
+          <Field label="Forma de pagamento do cliente">
+            <Select value={form.formaPagamento} onChange={(e) => updatePagto({ formaPagamento: e.target.value })}>
+              {Object.entries(FORMA_PAGAMENTO_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Valor total que o cliente vai pagar" hint={principalForm > 0 && form.valorTotalCliente ? `${fmtBRL(ganhoCreditoProprio)} de ganho sobre ${fmtBRL(principalForm)} liberados` : "Ex.: liberou 30.000 e o cliente paga 32.000"}>
+            <MoneyInput value={form.valorTotalCliente} onChange={(e) => updatePagto({ valorTotalCliente: e.target.value })} />
+          </Field>
+          {form.formaPagamento === "parcelado" && (
+            <Field label="Número de parcelas">
+              <TextInput type="number" min="2" max="120" value={form.nParcelas} onChange={(e) => updatePagto({ nParcelas: Math.max(2, Math.min(120, Math.floor(Number(e.target.value) || 2))) })} />
+            </Field>
+          )}
+          <Field label={form.formaPagamento === "parcelado" ? "Data da 1ª parcela" : form.formaPagamento === "avista" ? "Data do pagamento" : "Data do pagamento (a prazo)"}>
+            <TextInput
+              type="date"
+              value={form.formaPagamento === "avista" ? form.primeiraData || form.dataCredito || "" : form.primeiraData}
+              onChange={(e) => updatePagto({ primeiraData: e.target.value })}
+              required={Number(form.valorTotalCliente) > 0}
+            />
+          </Field>
+          {form.recebiveis.length > 0 && (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <table className="table" data-testid="recebiveis-op">
+                <thead>
+                  <tr>
+                    <th>Parcela</th>
+                    <th>Vencimento</th>
+                    <th>Valor</th>
+                    <th>Já pago?</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.recebiveis.map((p) => (
+                    <tr key={p.n}>
+                      <td>{p.n}/{form.recebiveis.length}</td>
+                      <td><TextInput type="date" value={p.vencimento} onChange={(e) => setParcela(p.n, { vencimento: e.target.value })} /></td>
+                      <td><MoneyInput value={p.valor} onChange={(e) => setParcela(p.n, { valor: Number(e.target.value) || 0 })} /></td>
+                      <td>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={!!p.pago}
+                            onChange={(e) => setParcela(p.n, { pago: e.target.checked, dataPagamento: e.target.checked ? p.dataPagamento || p.vencimento : null })}
+                          />
+                          <span style={{ fontSize: 12.5 }}>Sim</span>
+                        </label>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {Math.abs(somaRecebiveis - (Number(form.valorTotalCliente) || 0)) > 0.009 && (
+                <p className="panel-note" style={{ margin: "6px 0 0", color: "var(--negative, #9a3b3b)" }}>
+                  Atenção: as parcelas somam {fmtBRL(somaRecebiveis)}, diferente do total informado ({fmtBRL(Number(form.valorTotalCliente) || 0)}).
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {!form.creditoProprio && (
+        <>
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>
         TAC — Capital de Giro / Desconto de Recebíveis <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>(opcional)</span>
       </h3>
@@ -1759,17 +1895,34 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           </Field>
         </>
       )}
+        </>
+      )}
 
       <div className="preview-box" style={{ gridColumn: "1 / -1" }}>
         <strong>Resumo e prévia completa da operação</strong>
         <div className="preview-grid">
+          {form.creditoProprio ? (
+            <>
+              <span>Valor liberado ao cliente</span>
+              <span className="num">{fmtBRL(principalForm)}</span>
+              <span>Total que o cliente vai pagar</span>
+              <span className="num">{fmtBRL(Number(form.valorTotalCliente) || 0)}</span>
+              <span>Ganho da operação</span>
+              <span className="num">{fmtBRL(ganhoCreditoProprio)}</span>
+              <span>Pagamento</span>
+              <span className="num">{form.recebiveis.length > 0 ? `${form.recebiveis.length}x · ${FORMA_PAGAMENTO_LABEL[form.formaPagamento]}` : "—"}</span>
+            </>
+          ) : (
+            <>
           <span>Receita da instituição (banco)</span>
           <span className="num">{fmtBRL(Number(form.valorAReceber) || 0)}</span>
           <span>Honorário líquido deste lançamento</span>
           <span className="num">{fmtBRL(liquidoPreview)}</span>
           <span>Comissão do líder estimada (3%)</span>
           <span className="num">{form.liderId ? fmtBRL(comissaoLiderPreview) : "—"}</span>
-          {form.tacAtivo && (
+            </>
+          )}
+          {form.tacAtivo && !form.creditoProprio && (
             <>
               <span>TAC — {fmtBRL(Number(form.tacValorGeral) || 0)} total</span>
               <span className="num">
@@ -1778,7 +1931,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
             </>
           )}
         </div>
-        {form.colaboradorId && (
+        {form.colaboradorId && !form.creditoProprio && (
           <>
             <strong style={{ marginTop: 12 }}>Projeção da meta mensal do consultor ({monthLabel(ym)})</strong>
             <div className="preview-grid">
@@ -1899,14 +2052,27 @@ function OperacoesPage({ db, mutate, user }) {
                 return (
                   <tr key={o.id}>
                     <td>{o.numero}</td>
-                    <td>{institutionName(o.instituicaoId)}</td>
+                    <td>
+                      {institutionName(o.instituicaoId)}
+                      {o.creditoProprio && <Tag tone="brass">Crédito próprio</Tag>}
+                    </td>
                     <td>{clientName(o.clienteId)}</td>
                     <td>{hon?.dataCredito ? new Date(hon.dataCredito + "T00:00:00").toLocaleDateString("pt-BR") : "—"}</td>
-                    <td className="num">{fmtBRL(o.valorAReceber)}</td>
+                    <td className="num">{o.creditoProprio ? <span title="Total que o cliente vai pagar">{fmtBRL(o.valorTotalCliente)}</span> : fmtBRL(o.valorAReceber)}</td>
                     <td>
-                      <Tag tone={o.recebidoBanco ? "positive" : null}>{o.recebidoBanco ? "Recebido" : "A receber"}</Tag>
+                      {o.creditoProprio ? (
+                        (() => {
+                          const ps = o.recebiveis || [];
+                          const pagas = ps.filter((p) => p.pago).length;
+                          if (ps.length === 0) return <Tag>Sem parcelas</Tag>;
+                          if (pagas === ps.length) return <Tag tone="positive">Recebido</Tag>;
+                          return <Tag tone={pagas > 0 ? "brass" : null}>{pagas > 0 ? `${pagas}/${ps.length} pagas` : "A receber"}</Tag>;
+                        })()
+                      ) : (
+                        <Tag tone={o.recebidoBanco ? "positive" : null}>{o.recebidoBanco ? "Recebido" : "A receber"}</Tag>
+                      )}
                     </td>
-                    <td className="num strong">{c ? fmtBRL(c.liquido) : "—"}</td>
+                    <td className="num strong">{c && !o.creditoProprio ? fmtBRL(c.liquido) : "—"}</td>
                     <td>{hon ? collabName(hon.colaboradorId) : "—"}</td>
                     <td className="num positive">{c && hon?.liderId ? fmtBRL(c.comissaoLider) : "—"}</td>
                     <td className="num">{o.tacAtivo ? fmtBRL(o.tacValorGeral) : "—"}</td>
@@ -2058,6 +2224,90 @@ function lastMonths(n) {
   return out;
 }
 
+/* ---------------------------- Crédito próprio na operação ----------------------------
+   Operação feita pela própria Adventus (sem outra instituição financeira): não gera
+   honorário do cliente (o ganho já está embutido no crédito). Em vez disso, registra-se
+   o que o cliente vai PAGAR e quando — em 1 ou mais parcelas — e isso espelha na Agenda,
+   no fluxo de caixa (entrada na data do pagamento; saída do valor liberado na data do
+   crédito) e na DRE (só o ganho = total pago − valor liberado, rateado pelos vencimentos).
+   Dados na operação: creditoProprio, formaPagamento ("avista" | "prazo" | "parcelado"),
+   valorTotalCliente e recebiveis [{ n, valor, vencimento, pago, dataPagamento }]. */
+
+const FORMA_PAGAMENTO_LABEL = {
+  avista: "À vista",
+  prazo: "A prazo (1 pagamento futuro)",
+  parcelado: "Parcelado",
+};
+
+const normTxt = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const ehInstituicaoAdventus = (inst) => normTxt(inst?.nome).includes("adventus");
+
+// divide o total em n parcelas iguais e mensais (a diferença de centavos vai na última)
+function gerarRecebiveis({ total, n, primeiraData, anteriores = [] }) {
+  const T = round2(total);
+  const N = Math.max(1, Math.floor(Number(n) || 1));
+  if (!(T > 0) || !primeiraData) return [];
+  const base = Math.floor((T / N) * 100) / 100;
+  const out = [];
+  let acc = 0;
+  for (let i = 0; i < N; i++) {
+    const valor = i === N - 1 ? round2(T - acc) : base;
+    acc = round2(acc + valor);
+    const ant = anteriores.find((a) => a.n === i + 1);
+    out.push({
+      n: i + 1,
+      valor,
+      vencimento: addMonthsISO(primeiraData, i),
+      pago: !!ant?.pago,
+      dataPagamento: ant?.pago ? ant.dataPagamento || null : null,
+    });
+  }
+  return out;
+}
+
+const opPrincipal = (db, op) => {
+  const hon = (db.honorarios || []).find((h) => h.operacaoId === op.id);
+  return Number(hon?.valorLiberado) || Number(op.valorAprovado) || 0;
+};
+const opDataCredito = (db, op) => (db.honorarios || []).find((h) => h.operacaoId === op.id)?.dataCredito || null;
+const opsCreditoProprio = (db) => (db.operations || []).filter((o) => o.creditoProprio);
+
+// ganho (juros) das parcelas das operações de crédito próprio dentro do período (competência, pelo vencimento)
+function ganhoRecebiveisPeriodo(db, start, fim) {
+  let ganho = 0;
+  opsCreditoProprio(db).forEach((o) => {
+    const ps = o.recebiveis || [];
+    const total = ps.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    if (!(total > 0)) return;
+    const g = total - opPrincipal(db, o);
+    ps.forEach((p) => {
+      if (inRangeISO(p.vencimento, start, fim)) ganho += (g * (Number(p.valor) || 0)) / total;
+    });
+  });
+  return ganho;
+}
+
+// entradas (parcelas pagas) e saídas (valor liberado) de caixa das operações de crédito próprio no mês
+function caixaRecebiveisMes(db, ym) {
+  let entradas = 0;
+  let saidas = 0;
+  opsCreditoProprio(db).forEach((o) => {
+    const dc = opDataCredito(db, o);
+    if (dc && monthKey(dc) === ym && (o.recebiveis || []).length) saidas += opPrincipal(db, o);
+    (o.recebiveis || []).forEach((p) => {
+      if (p.pago && monthKey(p.dataPagamento || p.vencimento) === ym) entradas += Number(p.valor) || 0;
+    });
+  });
+  return { entradas: round2(entradas), saidas: round2(saidas) };
+}
+
+// o recebimento aparece para quem enxerga o honorário/operação a que ele pertence
+function recebimentoVisivel(db, r, visibleHonIds) {
+  if (r.tipo === "cliente") return visibleHonIds.has(r.refId);
+  if (r.tipo === "credito") return (db.honorarios || []).some((h) => h.operacaoId === r.refId && visibleHonIds.has(h.id));
+  return true;
+}
+
 /* ---------------------------- Agenda de recebimentos ---------------------------- */
 
 // Espelho automático das OPERAÇÕES na agenda. Nada é gravado: as linhas são
@@ -2088,6 +2338,19 @@ function agendaAutomatica(db) {
       id: `auto-cliente-${h.id}`, auto: true, tipo: "cliente", refId: h.id,
       descricao: "Honorário do cliente", valor,
       dataVencimento: h.dataCredito, recebido: false, dataRecebimento: null,
+    });
+  });
+  // crédito próprio: uma linha por parcela que o cliente vai pagar
+  opsCreditoProprio(db).forEach((o) => {
+    const ps = o.recebiveis || [];
+    ps.forEach((p) => {
+      if (!p.vencimento || !(Number(p.valor) > 0)) return;
+      out.push({
+        id: `auto-credito-${o.id}-${p.n}`, auto: true, tipo: "credito", refId: o.id, n: p.n,
+        descricao: ps.length > 1 ? `Pagamento do cliente · parcela ${p.n}/${ps.length}` : "Pagamento do cliente",
+        valor: Number(p.valor), dataVencimento: p.vencimento, recebido: !!p.pago,
+        dataRecebimento: p.pago ? p.dataPagamento || p.vencimento : null,
+      });
     });
   });
   return out;
@@ -2170,7 +2433,7 @@ function AgendaPage({ db, mutate, user }) {
 
   const visibleHon = visibleHonorarios(db, user);
   const visibleHonIds = new Set(visibleHon.map((h) => h.id));
-  const list = agendaCompleta(db).filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
+  const list = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds));
 
   // dar baixa numa linha automática: o repasse grava na própria operação; o
   // honorário vira um recebimento real (que passa a valer no fluxo de caixa).
@@ -2178,6 +2441,14 @@ function AgendaPage({ db, mutate, user }) {
     mutate((d) => {
       if (r.tipo === "banco") {
         return { ...d, operations: d.operations.map((o) => (o.id === r.refId ? { ...o, recebidoBanco: true, dataRecebimentoBanco: data } : o)) };
+      }
+      if (r.tipo === "credito") {
+        return {
+          ...d,
+          operations: d.operations.map((o) =>
+            o.id === r.refId ? { ...o, recebiveis: (o.recebiveis || []).map((p) => (p.n === r.n ? { ...p, pago: true, dataPagamento: data } : p)) } : o
+          ),
+        };
       }
       return {
         ...d,
@@ -2194,6 +2465,7 @@ function AgendaPage({ db, mutate, user }) {
       return h ? `Honorário · ${db.clients.find((c) => c.id === h.clienteId)?.nome || "—"}` : "Honorário removido";
     }
     const o = db.operations.find((x) => x.id === r.refId);
+    if (r.tipo === "credito") return o ? `Crédito próprio · ${o.numero} · ${db.clients.find((c) => c.id === o.clienteId)?.nome || "—"}` : "Operação removida";
     return o ? `Operação · ${o.numero}` : "Operação removida";
   };
 
@@ -2226,7 +2498,7 @@ function AgendaPage({ db, mutate, user }) {
         <div>
           <h2>Agenda de recebimentos</h2>
           <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
-            Os recebimentos futuros das Operações (repasse da instituição e honorário do cliente) aparecem aqui automaticamente, nas datas cadastradas na operação.
+            Os recebimentos futuros das Operações (repasse da instituição, honorário do cliente e pagamentos do cliente no crédito próprio) aparecem aqui automaticamente, nas datas cadastradas na operação.
             Use "Novo recebimento" só para parcelas ou lançamentos extras.
           </p>
         </div>
@@ -3543,6 +3815,8 @@ function receitaCreditoPeriodo(db, start, end) {
       if (p.pago && inRangeISO(p.dataPagamento, start, end)) encargos += Math.max(0, (Number(p.valorPago) || 0) - (Number(p.valor) || 0));
     })
   );
+  // operações de crédito próprio lançadas em Operações: ganho = total pago − valor liberado
+  juros += ganhoRecebiveisPeriodo(db, start, fim);
   return round2(juros + encargos);
 }
 const receitaCreditoMes = (db, ym) => receitaCreditoPeriodo(db, `${ym}-01`, `${ym}-31`);
@@ -3556,7 +3830,8 @@ function creditoCaixaMes(db, ym) {
       if (p.pago && monthKey(p.dataPagamento) === ym) entradas += Number(p.valorPago) || 0;
     });
   });
-  return { entradas: round2(entradas), saidas: round2(saidas) };
+  const op = caixaRecebiveisMes(db, ym);
+  return { entradas: round2(entradas + op.entradas), saidas: round2(saidas + op.saidas) };
 }
 
 const CANAL_COLORS = { honorarios: "#B08D52", instituicoes: "#2A3A63", tac: "#7A8CA8", credito: "#3F6B4F" };
@@ -4208,7 +4483,7 @@ function Dashboard({ db, user }) {
   const receitaInstituicoes = operationsInPeriod.reduce((s, o) => s + (Number(o.valorAReceber) || 0), 0);
 
   const visibleHonIds = new Set(rows.map((r) => r.id));
-  const recebimentos = agendaCompleta(db).filter((r) => (r.tipo === "cliente" ? visibleHonIds.has(r.refId) : true));
+  const recebimentos = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds));
   const statusCounts = recebimentos.reduce((acc, r) => {
     const s = recebimentoStatus(r);
     acc[s] = (acc[s] || 0) + 1;
