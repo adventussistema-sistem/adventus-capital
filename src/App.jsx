@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Bell,
   Tag as TagIcon,
+  Package,
   Search,
   Download,
   Printer,
@@ -64,6 +65,21 @@ const LOGO_FULL_WHITE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAoAAAAH6C
 const LOGO_MARK_WHITE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAAEcCAYAAAB9B4nYAAArGElEQVR42u2dd5hlVbXtf+tUddNNzjkLKAhIFAEBAUFQkSAoSL5kUCQjSTABT4kS9BpRLz6Vq4jPh8hTQEFAyUhSEOUSFWlyaKrOGe+PvSa1+nCornDCXvvM8X31Vcc6e68w1hhzzTUXOByTgKTgreBwOJy0HA6Ho10kFb+meGs4HI6yE1Ytfv+RpM3TP3M4HI4ykdVAVFfrqMDN8c8GvHUcDkfpCCt+/4WkRiStw9O/czgcjjKR1XsiWdXj1/OSlo3Ky62hw+EoBWFZ7OrKqKyG45ckXe4qy+FwlE1dbRwJqq4RGGnt5KTlcDjKpK6ubiIpI6+GpP+RNJ+kmudnORyOXqurzVqoq2aVdaGrLIfDUQZ1dU0LdWVoxD+vS9rIScvhcPRSXW05irpS09/dIWmK5Wx5Kzocjm6rq9+Poq5aWcPjXWU5HI5eqKutx6CuUmtYl/SSpJU8N8vhcHRNXUXC+cMY1VWzyvqVqyyHw9ENshqM3z84DnWVYih+391Jy+FwdENd1eLh5vGoq+bcrKckLWw/z1vW4XC0m6wsdvWRCZJVszX8VqraHA6HoxPq6tZJElYj+b/vc2vocDg6pa52miRZNedm3StpDs/Ncjgc7VZXAzH5s9EGwkpJ7zS3hg6Ho93q6mNtUlfN1vBVSau5NXQ4HO1SV4OS7k4SQNsFI79rnbAcDsdkycryrj7RZnXVKjdrP7eGjvHCA58OI6sQx8MgcAewKtAA2q2CGvH7s8DqwL8AQggN7wXH7OBJfA7DQCSNXYHVOkRWNuYELAScHT/TF06HwzF2dRW/5pD0QAdiV6PFs7aJz+DxLIcrLMeY1ZWA3YG3R3XV6bERotK6QNKcBWd5bpbD4Zi9uqpJmibpwS6pq2aVdaarLIfDMRbCsryrgzq4Mzi73KzXJa3tpOUYiyx39LG6imNgGnAPsHy0ad0MFdQpgvs3Ae+Nz9OIFtXhmAUew+rz/o+7dPsCK9Cd2FUzBoBhYEPgkBBC3celwxWWo5W6ApgTuA9Ypgfq6o3HiV8vAmsAjwHBc7McrrAcbyibaLv2B5btkbpKF04B8wHnxefyxdThCssxi7qaO6qrpXqorlJYPGvHEMLPJQ1Ei+hwuMJydcWBwNI9VletlNZ5kubFc7McTliuroC6pPmAoyNBhBKNxwawHPCFGMPyNAeHE5arKw4Blog2rFayMVkHDpO0QQhh2HOzHKkEd/SPurKDx/MBDwCLUo7YVTMslnU7sEF8Rs/NcrjC6rf+jpP+MGCxEqqrN1QgRW7WOsCRMfDuKsvhCquP1JX19YJRXS1U8jFguVmvAmsCf8dzs3zF9SboO3X1KWBhiuB2mRcs2zGcC/iq52Y5XGH1n7paOKqrBTLqf7ODu4UQfuS5Wa6wHP2jrj4dLWFOVT5NaZ0tacGCf/26eycsR1XVVQ1oSFoMOJRy7grObow2gCWBM7ykshOWo+K2P6qro6IVrGc44Qficx8gabMQQt1zs/p0MHsTVF5diSJB9D5g3oz73WJZ9wDrUaQ9eG6WKyxHBdXV0RTJojmqq1RlDVNcDXas52a5wnJUU10tFdXV3BXoc1HEs4aAtUMID0iqeW6WKyxHddTVscA8maur5gV2GnChL7qusBzVUlfLAvdSVBWtUn+bHdw3hHCJ52a5wnJUQ10dR5EpXgV11bzQNoAvS1oUz81ywnJkra4aklakuFxCVC84bQpyEeAsz81ywnLkr66OB6ZXUF0ZLDdrT0lbe25Wnwxub4LKqSsBbwP+DMxR8X620s5/BdYGZuK5Wa6wHNmpqxMpdtKqbpVqFLlZqwAn+52GrrAc+amrVYC7gCmxf6vex5ab1QDWDyHc5blZrrAc+airk6IV7Jf6UfaOU4ALYykdX4idsBwlVlcDFDuDqwG7Up5ru7oFC8C/FzjYA/BuCR0lJ6w4SX8I7EYR1xnst2aIXy9QnDd8Ai+p7ArLUVp1tQawc1RX/agurNDf/MC5XlLZCctR1plaTM5TKOI4/ZxEadZwF0nbuTV0S+gooboC1gJuif3Z74uQEfYjFLftvAzIc7NcYTnKpa4GoiXyMV2orOWBz8UYlo9zV1iOXquraHnWA/7oC9CszROVFsCGIYRbvKKDKyxH7yclwGcZOQzsmHUhHgAutjhWct2ZwwnL0WV11ZC0AfBh+ndncDRYAH494HAvqeyW0NE7wqpFwroS2JaRgnaON6tQUQTe16QIxHtulissRw/U1cbANq6uZrsgi6JEtF9374Tl6JFqgCJ2FfDY1Vit4XaSdvHcLLeEju6qq7qkzYDr6L8zgxOF5WY9AawBPI/nZrnCcnRVXeHqalzjvEFx5dnpnpvlCsvRPXW1BfBbV1cTIntrs01DCDd4bpYrLEfn1dWprq4mvDjb10WSpsSFwBdtJyxHB9RVQ9LWwKb4zuBkxnudIsXBr7t3S+joEGFZ3tUNwMZ43lU7rOFMiosrHgRqbg1dYTnaq662jWTl6qo9i/ScwIW+U+iE5Wg7Zyngsat2wnKztpK0p+dmuSV0tE9d1SV9BLjCrWBbYcdz/k1RUvkZAD+24wrLMTl1VaOod+Vo/9gXsCjwZb/u3gnLMXl11QC2p6g44Oqqc9ZwH0lbujV0S+iYOGHVYv/cCrwLD7Z30hoG4C8Uu4ZD+HX3rrAc4yKrwaiudqKo1+5k1dk5UAfeAZzkuVmusBzjIyvLxq4Bt1MEhJ2wOtzssY2HgfVCCPf4sR1XWI4x9klUV7tQVBZwsurewj0HxbGdkCweDicsxyjqSpKmAifHlb/sk6ZBNXLDLAC/KXBAVFc+P5ywHGNQV7sCq1H+igyKz1cVJRJim58haUmKG7V9jjhhOUZRV3MAJ5ZcXSmqkQAcBtyfqK3c54OABYGzvaSyE5ZjFEsS1dXuwNtLrq5sJ+3rIYSLgaMrQlipNdxV0oc8N6t8EthRDnUVgKnAn4G3JXarrGR1J7AhRc7S65IuAg6lGgmulpv1d4pSNK/iJZVdYTnepK72AlYqsbqyCfsKsEcI4TVG4jzHAX+NZFUFa9gAVgROi33jKssVliNRV9OAe4DlS6yuhoFBYP8Qwrdjgutwckh7E+B3CeHmPL4sN0vAe0IIt3lulissx4i62gdYocTqqh7J6r9SsgKIZDUYQrgeOIuROFAVFvNB/Lp7V1iOWQb/nMC9wLIlVVdGog8C61LcpDxLTCe+Sy1O8FsYSXrNfVG0mNwRIYTzXWW5wup3dSVgP2C5kk5wu+59iCJu9WIhqmYNQNvvQwgz4/sMJ/839znSAD4vaTk8N8sJq4/VVV3SPMCxlDfvyhTGZ0IIf4rWr6XCSKzhLcCXKmQNBcwLnO+5WU5Y/a6uDgCWLqm6srjVL0II50gaHAMBWd7SF6M1HMv/KX1fxXfYXtJHPTert6uHozfqirhq3w8sTvliV5aL9DiwDkUp4TCWEsLJLT+rR9KaQv67htYej1HE517Ec7NcYfVLu8eBfjCwRAnVVRp72juE8DQj5xxnvwoWZDUQQriHorxzFayhxbKWAb7kuVmusPpNXc0HPEBRU7xs6sryrT4fQjg1TWEY53vaJL+OogpC7lnwSpTWJiGEG33X0BVW1WGxq8OAxUqorixudR1wWozVjHtCxnc0y7Q/8BIjAezcF/gaft29E1afqKu6pAWBT1PeuNUzwF5NpDP+2V1Yw8EQwoPA8YyUI856wYnvsBZwlNfNcsLqB3V1OLBIQhBlIqwaxdGbR5Obeyal2OLPuRj4NdXYNTSr+1lJK+G5WV2XuI7OqyurtbQwxc7ggiXrA4tbnR9COGIicasxvPuyFFUe5q3AgmnxuKtCCNt6LMsVVuUWh0RdLcRIAbyyTL5BiivFjpto3Go0a0ixy/gIcAQjhfKqYA23kbS752a5wqqiulo0qqv5S9T+lsLwCsWNMX+xPKoOtINVd/gZsCP57xpaG/2L4najZxOCdrjCyl5dHQksUEJ1VQM+GclqoIMTrhE3Hg6NkzyQd+0sW4gWZ+S6e59TrrAqoa6WAO5jJH5Thra3uNUlIYR92xm3GqU9rHbWLsBPkmfIGaYUtwghXOvxLFdYWbdxVFdHUySLlkVdNSJR3A98qt1xq1Gkph2Qvgz4YXyG4Yr09UWSpkVidjHghJWluqpLWprikLMoR8zG4lYzgT1DCC9FMulWINzSAA6nOKuYe1nlgUi6q1JUtfDcLCesPC13JIFjgHlKpK7MwhwXS/8OdtPCxFhPCCE8AxxE/rEsI6068BlJq0Ul6fOr3WPHm6Cj6koUh2XvA6bH9u51mxtZXR5C2KkbcatR2sh2Db8RFWjuu4b2/NeFEDaPNrvhFR1cYeWkro4D5qIcWe22i/U/wAFmWXs5weMzHAM8XBFrWAfeJ2k/t4ausHJTV8tT1GqfowTqKq00sEUI4Xdl2M1Kdg23AH5L/ruGRrjPUuRm/ZMx1hFzuMLqtbr6TLSCZVBXZldOi2Q1WIat92TX8BrgPPLfNbTFaiH8untXWBmpq7dR3OI8tQTqysjqN8DWZl3KEltJamdNBW6j2G3LPQnT2nzbEMJVnpvlCqvs6uoEistRe62ubOI/TXH3IZQsEJzcuPMqxY07doFp7rWzBFwgaa6Clz03ywmrXOpqgCLH6O3A7nHi9XrXywjzP0IIjzOOUsc9soY3AWeSf1llK0GzEnCKH9txS1hKwooT7/vAnvQ+gGyff3YI4ZhepjCM0xrWgD8Ca2duDW2jowFsEEK4w62hE1ap1BVF/OWOSBS9jF1ZDOWPwCY2ccqeE5SQ/trAzfEdcr5xx/rhJuC98T08N8stYSlsjYCTKILHvYxd2We/QHH0ZohMrqRKrOEdwOcqYA3t+TcEDvXcLFdYZVAFtjO4OnB7Ymt6bQX3CCFcmpsNSawhwPVxsuecBW8bCC9S3Gn4GJ6b5Qqrt8IgCDg5EkUvlYyR1bciWQ3mFjNJLr+oU+wavppM/FyFgSiqdZznuVmusHqpBix29S6KEsOB3sWuTIXcC7ybohpDtvGSJJ51BHAu+WfBW//sGEL4uQfgnbB6YgfjdVY/BXbqoXWxHakh4D0hhLs6Veq4y9ZwIB6Q/i2wRebW0GKLjwJr4tfduyXsgQJoSFoP2IHe5l3ZRD4qktVg7jGSOJGtrPIBFJsIOV/GarlZywJf8NwsJ6xeqBqAU5LB2CuyGgQuCyF8rez5VuMkrUZUWQ9TVG3N/TJW2zU8TNJ7/LYdt4TdVFd1SRsAN/ZwAbBV+u/AusDzyUSvYnv/H+DDFbCGNYod5Q3Mzrs1dIXVDXX1WXp3z55tl9cprpZ/lupul9tZvIOBGeRdpdRU4jrAkTHw7irLCaujq31D0kbAtvQudmUD/ZQQwg05pjCM0xrW4nnIw8n/Mtb0uvsVGSlm6HDC6qi66lUQ2OJWV4UQzpA0SN6xnbGQlmXBX0pxRVjOWfA2buYGLvDcrLE3mmP86qouaVPgd/TmcK5tj/+T4oBw31S1TFTIQsDdFLdp57z4mkr+RAjhf3tuliusTqmrU5t+383PT0vGPEVJS8Z00BqGEMLTFDdI93J3tp1K62xJC+J1s5yw2qyuGpI2p0hi7EXsyqzgmSGEX1U5bjUGa3g5cAl5l1U2wl0i9qnnZrklbJ8diYR1HbAZ3d9at8+7EdjU7GE/bodHFRKAeYE7KZIxlbk1rAGbl+WCEFdY1VBXW0Wy6ra6sqDscxQlY+r08bEOC1KHEJ6jGpexGgFfKGlqQsoOJ6yJcpYCvYtd2Qp8cAjh4SocvWmjNfw1cHG0hvWM5+IwRYmi4z03yy3hZNVVXdK2wJU9sIJWpeDrIYRDqnT0po3WcE6KzPGVyTcL3jZUXgfWCSE84NbQFdZk1NVnexTbGATuAo6M5858AL/ZGr5EUTsr95t2oLjL8iLvXSesiaqrBsX5tfd0efW2yfcKRdzqNbwcyWjW8HrgrNg/uSpQe/YtJO3rh6PdEo6XsIzU/wis12XCMit4YAjhm24PZmsNa7G9bqEoRZxrioDFJmdQxLSejsTc9yWVXWGNPgkssL19D8jKrOAPI1kNOlnN1hoSQpgZreEw+V7GauckFwbOsmRZ72VvhNmt2PZ1C7AW3UtlMGXwUCRKr0w5vkVmWNJpFDu6OZdVtgXyAyGEq11hO2GNNvBtZ3AXioO23VJXtlMkYJMQws0+UCdkDQNFgu365LtraMrqQYozo1nX6HdL2NlBr1gB4eQu2wqbXCdEsnIrOH5rqJj2sR/wWrIQ5Dg/68AqwMmem+V4S3UVv++mAsPqDuxzfmn2xntj4tYwfj82tumQ8kQjjouZkt6Vjk+3hA4b7LW4kt1JcfV8N86omfx/gqIS5dP4ZZvtsIYCrgM2ydga2nP/geIMaehX1e2WsMXKHEliV2A1urM1npaM2TeE8C/6qGRMh61hI1rDlzO2hpabtTFwkOdmOd5YlSXVJE2V9ECU4/UuyH6zK190K9gxe39ol+19J6xhXdKzkpa2seoKq79hWe27A2/vkrqyfKvfU9T39qM3bbbaUTVfDFxNvmWVrdDf/MA5/VpS2WNYs8Y8AjCVovTuSnQ+dmWJjc8B64YQ/pH7bc0l7VuLZS1LEZecl5Ecu9xg8aztQwi/6LeUF1dYb1ZXe1Kc+O+WuqpRHL35R3Ju0dHOVXnkMtZHgCPJ+zJWU1rnS5qn4GO/bafv1FX8mi7pb12KXVnc6oL4DB636nw/W6rD5ZnHs2zsnNNvY8ctIbMc5ziUoqxHp7e/7effDmxEsQPkN/92zxouFm3/Qpk6DdtVBtgwhHBLv1jD4IP4jdjVdOBeOl8b3Abaq8D6IYT7PW7V1f62I1cfA35M/rlZtwIb0ifX3bv3Hcl32g9Yjs7HruznfyqSlceturlCj9TO+glwKfnuGlpu1nrA4VFdVX4+97XCSor8zwXcDyzVYXVllQN+EELYy0sd99QaAixAUcl1SfK8ccd2mV8B1gT+QcVPR/S7wqpFCX0gsHSH1VUjktVfgMPipPF8q96oLLuM9RngYEZu3MnNTqXX3Z/fD7lZfauwEnU1D/AAsHgHV1kLkjaAjfspSFryMWCbLd8E9iff2lkWz/p4COEnVR5b/aywBuKKdDDFrbudVFc2oI6LZOUlY0oy0aPSPRp4OPZRjnbKlNY5khbAc7Oqp67i1/ySnox5V40Ol4z5ua3q3gOlGgt21nCLJMepkXFu1teqPM76lYVNXR0arWCnamabansU2D/aUN8RLJM0Gdk1vAY4L1rCHPvIdjsPkvTeaHUrV9Gh72JYSexqQYqdwYXpTOxKiRXcMoRwrcetSj0mahTnSG+jqIGWY36WPfPdjJSGrlRuVj8qLFNXnwQWYeQ8XycGzyDwuUhWHrcqr8qyG3depQi+15NFJzeVNUyR4nBMFXOz+kphJUczFo7qasEOtYOtdNcA7ze57kdvSj8+LAv+dOAE8tw1tNysmcDaIYS/VOkkRb8prBBJ43CKc2T1DpCVxa3+Dextf+ZklQUaMe5zGnBHJKvcVLHtGE4HLqiaMOkbwrKAt6TFgMNip3YiRmEB/P1DCI/hpY5ztIavUxzVGsrYGtaBrSTtVaWSyv2ksCyr/QiKIxmdUFdmIc4NIVzhcassSct2De+ISivnCqUN4CuSFqUiuVl9EcNKYleLU8Su5u3A+1vc6haKywIabgWzVuM2Zq6nKAGU466hLaDfCyHsU4Wzq/2isCx2dTQwH+3Pu7IzXC8Ce4QQhvCr5XO3hnbjzv4UpYBytIYWg9tb0pZVyM2qPGFFddWQtBTFIedO5FzZ9vFhIYS/JleFOfIlLbu84n7gxMytIcCFkqZHa5its6r1x9gLAo6lOOjc7tiVye7vhBB+4CVjKjVwTJGcT5GikuOuYS2O0XcAJ8aFNNt5X+kYVhK7Wga4j2Krt523pVjn30eRWfyaW8HqjaGotlakSHWYm/xu3LFqIXWK25nuyTU3q+oKy9TVcRRF+toZu0oT9PYIIbySxD8c1bKGAyGEh4FjyPPGHRvzU4GLrCx4ztawkitjrMiwgqSXO1CRwU7HfzJ+nldhqPZ4sht3fpnxjTs2Zg+M75JdAD5UeIDZMYuvAwfR3mMWtsX90xDCzh636o8FMCrqpSjKKs+foTU0C/gcsAbwJJmVVK5VeHA1JK0E7BU7aqCNnT4APAIcmHupY0kDbg3GZg0pko8fozjalWO/G+kuSKbX3deqO76CKA6wTqd9sSuLWzWAvUIIM5LPypLYQwj1EIKcuMY0qCwL/lLgMvLcNbT0jI9L+lBux3YqN0AT6b4yRV2gKW2U7mYrTwohnJ6rFUyIaTWK2k9XxGRXi2t4hv7o4wuKih93UVzKmtuNO7aA/4OiFM0rZLK7XUWFZYrnRGCONqorq291tZFVrlYwsQIPxDa6XtJ+kqa44hqTNQwhhH9RVKy16gi5OasGsAJwWu65WVmvfnFncFVJMyXV27S7Uo87jP+UtGT8jFoF2ivE75tLel7SQ5IOkjRP8m8G/UKDlm1nu4aXNO3A5YJG3OkckrRuoq4dXRxEdqHApW3eerbB+KGqdWwy8ZaPhCVJD0o6IZbieaNtnbjetDjW4kUmj0QCqGdGWjY/bo7966q6B+pqdUmvJ6qoXWT15XSCV1QtLCDp6uTdn5J0uqTlnLhGXSA/kBBAI1PS+nRVx3fZB8+P26iu7GfcGK1RZVegpP2mSvpBUzs8L+kiSas1LRADPu7eIPuLM7aG9djHy1Ul3FH6yRYbeq04YNqhrqwjn4v5XFS9I02lxl+fFdthZtImr0n6vqT10zhYPxOXTXBJc0v6axLzzFFl/dxjWd1VB//dxlXOfsZu/dSJ6Qor6aiEvF9vIvPLJW3RauHo4/G3aWyboYyt4UedtLozWNaNjV5vY+f9Zz/6+khaZnV2i8rK2qXZav9G0kf6nbiS9vpKptbQXMmjcSOh5gH4zhLWFW2KXRnh3S1pej/vnCSTcHNJTze1b3OA+WZJe0iaI/3//dJ2Zo0lTZP050wPSNvzXuQqq7NktUEkmsmqK8tNeVXSmt5ps5DW6jHdoVk9NKvaeyQd0pTL1Rc7i8l4XD+2Ua67hnVJG/n479wAaVfJD5uIB/WjFRwDaS0h6aa3sDz1pvZ/OOZyLdpPxJWMyVMztoaSdIekKZ6b1f6BsVGbkvZsYP3IyWrU9p5L0s9HmYzNxPWkpC/2Sy5XYg0HJd2SqTW0fv2Mz4X2DQzbybqqDYPCyO5vHnAcU5sHSV+bTbJkvYnQLJdr1fTnVdFyJO20ZtywyM0amgB4WdLKnpvVvtV+kzbkvTSS3S/37WNTEDYhT2ka4KO1r+GVeP6u0rlciY0+NlNraH12lc+J9q1gv2mDurKBdLzL3/HZnvjr/RKyqs9mYRhqkcu1WfNiVBV1myQ0/z5za7iHk9bk1dXmbVBXNoCuNLJyKzghFfGhaPnGMikbLf7N/5O0fdr2VSCuZGFdRdJLGVpD23l/StLCHiqZ3CC4bpKrliXKPSFpcffpkyat9ST9zzjtT/MEvknSrpKmpj8/50mSLLCHZm4Nv+0qa+Kdv9Uk1VVqTz7gHdE20lpB0p0TmJhjzeUKmY/bqzK1hva8m/tcmZi6un6SHW+T6XSPW7V9UqYlaoYmoHrTPv1bDFov0kRctdzGbVTwy0l6Vu0rfdTt3Kz7Yia/52aNY0JsO0l1ZRPiBnnRsk710aCKqg6aYNymVS7XlyQtkytxJW2zb+bW8DRf5Me3St00CXVlQcQZkpZPVZujvf0Uf31mU7xQkySuGZK+mmsuV2KdL8/QGtpmyWuS3ulzZ2wdvd0k1ZWtaju7F+9of6VpD4e3sBaTiTkqnvX8rqR1ciKuZNFdQtK/lF9ZZSPYa33+zL6ja5L+NImVaajpJLpL2s6Tli00u0SSmayqaCauuqSfSXpfs/0qq81PiPxjmVvD/Z20Ru/gHSaxSg8nBzo9aNgbdbxJVBXtsEKtcrmuVrwkpOzElbTJpZlaw7qkf3s60FurqwFJt0+wc21wv6xYk9xXhZ5N0FUl3d9GZdFoEdS/UdInypzLlTiGhSQ9nrE1vNTnU2t1tXMbrOB+bgVLQVqLJWkpQ22eROmkv1tvvmOxNIorGdvbZZ6bta2T1qwr0aCkuya4CtmE+C8nq1JN0jk1a/39duYkNe8sPiTpmDLmciUk/s0M41m28/uQipJD/X1sJ+nMXSe4Ahm5/VXSPCbDnTZ6vwglv75gErlaE8nl+rykZctCXIk1nDcmyeZmDY1gz+xrQaCRq5OmxGMajXESlv371yW92yVrKZWznVo4oSmYqw4T1wxJ50t6R3OctMeqc8sOknenc7OGJK3dt/MsUVd7TFBdGfMf5Vaw1IuSTda9kz6rd3ByNedyfacMuVzJeD8vQ2toc/Mm9ePluom6miPuKI1XXdm//YWTVVaL0wfiObtOB6CbiWs45nL1rC5XMuanx/N6nSTuTpLWJ/tOZSUDeJ8JDN70brVFPEckuz5fW9I/uqQyWi2EV0n6YC+IS7PeUTCcoTW0W9KX7Zt5l6w002KwfDxxjfTG3S09bpUtaS0r6dYuWqNWuVw3x82ewfT5Ok1cSRucnrE1/FnfzL2kww6YgLqyzv2cW8Fs+99UxnySruzBpG3O5bpT0oFNuVwdIy6N3LgzNZ7KyC0/y551h06RVpmyf0N8njmAe4AVAAFjkZZ1YAC4Dtgy/pxGCEFOA/mRVgihHhecbwD7xv6tdXG8NuJ3G3sPAxcB3wshPJNMRoUQGh16/7WBm+O4rpVprs6m3QLwKLAm8GJsI1VxoJq6OmScK0s9OdvUP/652qSVlqj5YlN8stvJkek4fFzSFzqdy5UozZMytIb2rF+trNNJYldzxqDreGJX1kA7etyqcmPCJu5hLRKCe0lcMySdI2mVJuIaaOe7x68bM7OGjcRab1DJOZmoq0+Ns3OMrM73uFVlScvGxo4qbp7p5eRtTol4RR2qy5Uk1q4WPyenXUPrn9tizK861VESdTWPiltXxqqurFFuiUFKLxlTXeKaEr9vpOKWo17bpOaUiGFJP5G0aQuVFCbx3kbWR2S8a3hspVRW0ilHjaNTjNRetCMWHreqPGnZOFlF0r0lmcCtcrl+3c5crsQWX5OhNaxHVbxiJWLL8SWCisOfj41DXdlA3dutYF+S1iKSflci1dEql+uGmMs1JX3+8RJXYg1XlPSC8rpxx8j1/1ZCZSUD8NhxrB72b77rZNWXpGWKY5qkHyek1SjRJE0X3Tsk7SdprokSV/LOB2ZsDXdrx3wNPRx49tnzAfcDizH7vKtG/PsHgPWBV6hqnodjVNVh+U+SzgWOYCQHqCxxzHr8bqriIeDrwCUTyeVK8rN+CXyIkdzDssP65SlgdeA5gHbnr3VTXZ04RnVlsnumpHUrFchzTDScUGtS6GWsJ9Uql+s0SUs3xbhqsyPp+M5LxZzDekYHpE0RfiNLV5TErhaU9M8xDjR76cPdCjqScZSWIppZ4sB0M3E9I+ncplyuUVMiEmu4e2bWMN2c2Cw7sZE0/GfHOMCaD1Y6WTlaqfX3RyIo825aq1yub8ejOLMlruRdL8ts19AEyT0qSkflkYaUqKuFo7RtzCZgai/6iIpbRrzUsWO0ibyminLDZVcgzcQ1FHO5NmmaK7NM7MQaLirpKeVVVtnI9ZRsVFairj4/hkGVbhe/z+NWjjGS1lIauXR3KCO7ZPiV4m00TXGu0DSHdsrUGr6a5E8OlHlAhWR1mDEGdTXUxMhuBR1jXRDnlvTLjCZ0q1yu6yV9XC3qciXkfElmpGXk/NtmIi7zCnjGGPy3/d1vrIP86I1jjOOsltinbyTjKaeEy9Tm3R5zueZM3nFKnBMLxHBJjtZw3/EKkdDlQSRgcYq8q3lHeQbL3fg3sDbwBBCyy91w9Jy0QggNSacBp8bxN9Yaa2VAIz5vcy7Xd0MIM8y1ANsAV5JXbhbAM8AawNPWV2WU6l+ZjYRNg5HbedzKMckQRJol3mjayMkFzSkRj8Yd9jSX6z8ztYY/KN0cb0p6e2E2sStr8LM8buVocyhiOxUH5nNKBxiNuGakuVwqbkhXhtZw67GSVreuMbJjBXaMYhhoRUQmaf8IvDfKYS917GgLaYUQhlVcrPszYKlRxmHpXyfOFXv2V4BvAX8BvgxMz8T2WujnIWAtYObs5ns3ri+y2NUywL3AXG/x2RZfeAlYL4TwYHpmzOFoI2m9Dbg8xk9yJS2bM40kbvVq/D49o3cwkXJGCOFEEzdv9Y+7wcIhMuaxwNzxAcNbPHgNODSS1aCTlaPNA3E4jqu/AZsD10SyGs71leJkV3yH6ZmRlXFQHTha0ruiExvoicJK1NVyUV1Nf4vPNZb9VgjhAFsJfYo5OhyimAp8F/hEnPAD5HE7zWiKK8fnt/n/B2CTSGItrWGnFZapq+OBOd9CXZmkvRf4dGTXuk8rRwcHZT0upkMhhN2Bs6LSsrBEtq+W6XMPxAVjY+CQaAkHuvqCibpakeKewam8uV6RefAhYMMQwp2z87AORxvHaIiLakPSkcA55JerVRVY+OcFitji47TIvexkp5i6OgGYxsiOQCspeFQkq0EnK0cXlZYK3tJgCOFcYDfg9SSu4ugeTODMD5wb+yZ0RWEl6mpl4G5gSgt1ZWR1WQjhYzFXpu4pDI4eqS3bQdwM+CmwEHnvIOYK44XtQwi/aHZcnSIsC2peAuzdouOt1PHfgXWiDMR3BR0lIa13UqQ9rOyk1RNrGIBHgNVDCC9LMrfWfksY1VVD0qpRYqd5IiQxgjqwZwjhOfycoKMcFtHSHu4FNgNujGQ15K3TVWtYB5YHzol8Ukv/sgP9HgScRBFob7yFFTw5hPAHj1s5SkhaAyGEJ4GtgStiSGOYvHcQc7KEpmhXI8a/rVJLWy1hTEloAO8EbmckryU0kdWvQwjbeNzKUWJ7WIu7hwG4CDiEkeRmL3PUgSZP3NirwJcojhkNx4WkM5Yw/uCT46qUqiuLWz0F7BMHgp8TdJRVaTWiHQkhhEOBU5LQhocv2q+qLGv/WmCjEMKXQghDIYRZrvFr20qRqKs1gVsjOaWEaMHLD4YQfuX5Vo5MlFYAanET6T+Ab8SJ1cBztdqpqp4HTg0hnB/bvbPuK6k79N8tyndYyZgzk4dxOHIiLitR80FJz2dcoqZspWUUS1m/3RaI0S6ZCe0iq7gCrUtRGiYkq096Tmgzk9RuBR05klYMyq9HUaJmGTztYTKq6mngpBDCN9P2He0/t1vSms9X8nCB4nrqvaIF9KvlHVkiSXu4FdgUuJO8qz10G8NJrOoyYP0Qwjft6r6uFDxIrOC7W1yfbVbw4+m/dTgyV1o25ueX9OvMShP3qlJqPSnv/Ilmq93NzrMbSn7Z5E2tA7/mcStHBUnLxv0USd/L8GaebiEl8u9KWtxIv+sXIicrzYZN1wwZad0laVo211I7HOMkreRy0zMSNeGkNWs7PCRph2be6OUqc1XTCjMs6RVJa7gVdFSctNKbeQ5vmrCuqqQLJS2QqKrQq46yTtqkqYPsYQ90K+joI9KytIed42Ldj2kPKUn/WdJWPVdVLdTVb5LOMbL6oZOVow+JazBZxJ/qo2B8epfosKT/ZbdUlyIclKir97W4L+1BSfOl/t7h6EPSeoekB/qAtFIVeYukjUujqlqoq2uTDjGFtaHHrRxOWiBpUUk3VJS0GglZvRZvop5i718asZKoq/e3sILHuhV0OGaZJ9MlXVYx0kpV1e8lrVM6VdVCXV0fH3imnQdysnI43jxX4q+/WoFcrVRVvSjp6IQPBksXAkpWjW2SFaMh6XFJi83u4KLD0YekFZJJfUIy8esZq6pfxYrClHrOWyBd0o1N6morj1s5HKOSli32eyfWsJ6Zqvq3pIObY3Vl9+QfbiKrL7oVdDjGNIcsGL+1pGczyNVKn+2nklZIhEut7I1di19/Sjz47+Kf+dEbh2N8pLWWpL+XNBifpik9KWnPLFRVC3W1QyITZ0harjm46HA4xkxay0q6tWSklT7H9yUtmY2qalJXA5JuS3z3Rz1u5XBMWgTMK+nKEpBWWgLmYUk7ZaWqWqwGOycv91WPWzkcbSOtAUnf6WHaQ0qUX5e0UPJcIacGDVFdDUq6Pb7QrZLm8LiVw9E292Ilar7Q5RI16efcJ+kDzWSaq9f+eHypF5L8C49bORztEwamtg7tQoma9LByQ9LZkubJUlW1UFdTJN0ZX25vj1s5HB0XCDtIerlDaQ/pz7tN0qZZq6oW/npXK2/qcSuHo2uktWFMKWhXMD5VVa9L+rykafaZWYd3EnU1EMub/k3SnF4yxuHoKmmtLOmeNpBWqqpukLR+JVRVC3W1b3zJdd0KOhw9mYOLNJVxmuixmpckHZf83MFKiI+m2NXTkj7jVtDh6ClpTZP0o6aCA+NRVVdLWj35ubUqNZLJ0WMkXVcpNnY48puPaYmac8eQ9pCqqhmSDmue21VqnBC/5o9ed2kvGeNwlMP1JELirUrUpKrqCkkrGelVcg4nEvQISTumf+ZwOHpOWuZ+dk+qpQw3qaonJe1TWVWVNkj8vmSSb+XKyuEo1zw10tpS0jNNCutSSUtXWlW1sIOrxxSG4HErh6PUpLWGpEckPSFpl8qrqtG8ssPhKPVctfDNUkkJmIG+nL+urByOLOZprZnAHA6Ho9Sk5QLD4XA4HA6HwzFx/H9w6Kw/iPermgAAAABJRU5ErkJggg==";
 const LOGO_FULL_BLACK = "data:image/png;base64,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";
 
+// produtos de crédito oferecidos como lista no cadastro da operação (editável em Cadastros › Produtos)
+const PRODUTOS_PADRAO_LISTA = [
+  "Capital de Giro",
+  "Desconto de Recebíveis",
+  "Antecipação de Recebíveis",
+  "Crédito Pessoal",
+  "Consignado",
+  "Financiamento de Veículos",
+  "Financiamento Imobiliário",
+  "Home Equity",
+  "Cartão de Crédito",
+  "Leasing",
+  "Consórcio",
+  "Crédito Próprio",
+];
 const emptyDb = () => ({
   institutions: [],
   institutionCategories: [],
@@ -75,6 +91,7 @@ const emptyDb = () => ({
   operations: [],
   honorarios: [],
   recebimentos: [],
+  produtos: PRODUTOS_PADRAO_LISTA.map((nome) => ({ id: "prod-" + nome.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-"), nome })),
   users: [],
   metricas: [],
   lancamentos: [],
@@ -659,6 +676,25 @@ function MoneyInput({ value, onChange, className = "", style, step, type, ...pro
         placeholder="0,00"
         {...props}
       />
+    </div>
+  );
+}
+function PercentInput({ value, onChange, disabled, ...props }) {
+  return (
+    <div className={`money-input-wrap percent-wrap ${disabled ? "is-disabled" : ""}`}>
+      <input
+        className="input money-input"
+        type="number"
+        step="0.01"
+        min="0"
+        max="100"
+        inputMode="decimal"
+        value={value === undefined || value === null ? "" : value}
+        onChange={onChange}
+        disabled={disabled}
+        {...props}
+      />
+      <span className="money-suffix">%</span>
     </div>
   );
 }
@@ -1567,6 +1603,7 @@ function CadastrosPage({ db, mutate, user }) {
   const tabs = [
     { id: "instituicoes", label: "Instituições financeiras", icon: Landmark },
     { id: "categorias", label: "Categorias", icon: TagIcon },
+    { id: "produtos", label: "Produtos de crédito", icon: Package },
     { id: "clientes", label: "Clientes", icon: Users },
     { id: "parceiros", label: "Parceiros", icon: Handshake },
     { id: "colaboradores", label: "Colaboradores", icon: Users },
@@ -1627,6 +1664,37 @@ function CadastrosPage({ db, mutate, user }) {
           onEdit={(id, nome) => editIn("institutionCategories")(id, { nome })}
           onDelete={delFrom("institutionCategories")}
           placeholder="Nome da categoria"
+        />
+      )}
+      {tab === "produtos" && (
+        <EditableSimpleList
+          title="Produtos de crédito (tipos de operação)"
+          note="Esta lista aparece no cadastro da operação como alternativas e vira a tag/filtro em Operações e na Agenda. Ao renomear, as operações já lançadas acompanham."
+          items={(db.produtos || []).slice().sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"))}
+          onAdd={(nome) => {
+            if ((db.produtos || []).some((p) => normTxt(p.nome) === normTxt(nome))) return;
+            mutate((d) => ({ ...d, produtos: [...(d.produtos || []), { id: uid(), nome }] }));
+          }}
+          onEdit={(id, nome) =>
+            mutate((d) => {
+              const antigo = (d.produtos || []).find((p) => p.id === id);
+              return {
+                ...d,
+                produtos: (d.produtos || []).map((p) => (p.id === id ? { ...p, nome } : p)),
+                honorarios: antigo ? d.honorarios.map((h) => (normTxt(h.modalidade) === normTxt(antigo.nome) ? { ...h, modalidade: nome } : h)) : d.honorarios,
+              };
+            })
+          }
+          onDelete={(id) => {
+            const prod = (db.produtos || []).find((p) => p.id === id);
+            const n = prod ? (db.honorarios || []).filter((h) => normTxt(h.modalidade) === normTxt(prod.nome)).length : 0;
+            if (n > 0) {
+              try { window.alert(`Não dá para excluir este produto: ${n} operação(ões) usam "${prod.nome}". Mude o produto delas antes.`); } catch (e) { /* sem alert */ }
+              return;
+            }
+            mutate((d) => ({ ...d, produtos: (d.produtos || []).filter((p) => p.id !== id) }));
+          }}
+          placeholder="Nome do produto (ex.: Capital de Giro)"
         />
       )}
       {tab === "clientes" && (
@@ -1725,7 +1793,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
 
   const [form, setForm] = useState(() => ({
     // Operação
-    numero: editingOp?.numero || "",
+    numero: editingOp?.numero || proximoNumeroOperacao(db),
     instituicaoId: editingOp?.instituicaoId || "",
     clienteId: editingOp?.clienteId || editingHon?.clienteId || "",
     valorAprovado: editingOp?.valorAprovado ?? "",
@@ -1763,6 +1831,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     honRecebiveis: editingHon?.recebiveisHon || [],
   }));
   const [tipoDefinido, setTipoDefinido] = useState(!!editingOp);
+  const [erroForm, setErroForm] = useState("");
   const escolherTipo = (tipo) => {
     const proprio = tipo === "proprio";
     const adventus = db.institutions.find(ehInstituicaoAdventus);
@@ -1862,6 +1931,12 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         e.preventDefault();
         const cp = !!form.creditoProprio;
         if (!form.numero || !form.instituicaoId || !form.clienteId) return;
+        if (!form.modalidade) { setErroForm("Escolha o produto (tipo de operação)."); return; }
+        if ((db.operations || []).some((o) => o.id !== editingOp?.id && normTxt(o.numero) === normTxt(form.numero))) {
+          setErroForm(`Já existe uma operação com o número ${form.numero}. Use outro número.`);
+          return;
+        }
+        setErroForm("");
         if (!cp && !form.colaboradorId) return;
         if (cp && Number(form.valorTotalCliente) > 0 && form.recebiveis.length === 0) return;
         if (!cp && form.honForma === "parcelado" && Number(form.valorHonorario) > 0 && form.honRecebiveis.length === 0) return;
@@ -1908,8 +1983,16 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         <button type="button" className="link-btn" data-f="alterar-tipo" style={{ marginLeft: "auto" }} onClick={() => setTipoDefinido(false)}>Alterar tipo</button>
       </div>
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>Dados da operação</h3>
-      <Field label="Número da operação">
-        <TextInput value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} required />
+      <Field label="Número da operação" hint={editingOp ? null : "Gerado automaticamente — pode ajustar se precisar"}>
+        <TextInput value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} required data-f="numero" />
+      </Field>
+      <Field label="Produto · Modalidade (tipo de operação)" hint="Escolha na lista — vira a tag e o filtro da lista de Operações">
+        <Select value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} data-f="produto">
+          <option value="">Selecione o produto</option>
+          {catalogoProdutos(db).concat(form.modalidade && !catalogoProdutos(db).some((n) => normTxt(n) === normTxt(form.modalidade)) ? [form.modalidade] : []).map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </Select>
       </Field>
       <Field label="Instituição financeira">
         <Select value={form.instituicaoId} onChange={(e) => onInstituicaoChange(e.target.value)} required>
@@ -1950,14 +2033,6 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>
         {form.creditoProprio ? "Dados do crédito" : "Honorário do cliente"}
       </h3>
-      <Field label="Produto · Modalidade (tipo de operação)" hint="Vira a tag e o filtro da lista de Operações">
-        <TextInput list="lista-produtos" value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} placeholder="Ex.: Capital de Giro, Desconto de Recebíveis…" />
-        <datalist id="lista-produtos">
-          {[...new Set([...PRODUTOS_PADRAO, ...listaProdutos(db).filter((p) => p !== SEM_PRODUTO)])].map((p) => (
-            <option key={p} value={p} />
-          ))}
-        </datalist>
-      </Field>
       {!form.creditoProprio && (
       <Field
         label="Parceiro estratégico"
@@ -2147,12 +2222,10 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>
         TAC — Capital de Giro / Desconto de Recebíveis <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>(opcional)</span>
       </h3>
-      <Field label="Esta operação tem TAC?">
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-          <input type="checkbox" checked={form.tacAtivo} onChange={(e) => setForm({ ...form, tacAtivo: e.target.checked })} />
-          <span style={{ fontSize: 13, color: "var(--text)" }}>Sim, preencher TAC</span>
-        </label>
-      </Field>
+      <label className="checkbox-row" style={{ gridColumn: "1 / -1", margin: 0 }}>
+        <input type="checkbox" checked={form.tacAtivo} onChange={(e) => setForm({ ...form, tacAtivo: e.target.checked })} data-f="tac-ativo" />
+        <span>Esta operação tem TAC — preencher valores</span>
+      </label>
       {form.tacAtivo && (
         <>
           <Field label="TAC — valor geral">
@@ -2161,17 +2234,18 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           <Field label="Parceiro da TAC">
             <TextInput value={form.tacParceiroNome} onChange={(e) => setForm({ ...form, tacParceiroNome: e.target.value })} />
           </Field>
-          <Field label="% Adventus na TAC">
-            <TextInput type="number" step="0.01" value={form.tacPctAdventus} onChange={(e) => setForm({ ...form, tacPctAdventus: e.target.value })} />
+          <Field label="% Adventus na TAC" hint={`Adventus recebe ${fmtBRL(tacValorAdventus)}`}>
+            <PercentInput value={form.tacPctAdventus} onChange={(e) => setForm({ ...form, tacPctAdventus: e.target.value })} data-f="tac-pct" />
           </Field>
-          <Field label={`% ${form.tacParceiroNome || "parceiro"} na TAC (automático)`}>
-            <TextInput value={fmtPct(tacPctParceiro)} disabled />
+          <Field label={`% ${form.tacParceiroNome || "parceiro"} na TAC (automático)`} hint={`${form.tacParceiroNome || "Parceiro"} recebe ${fmtBRL(tacValorParceiro)}`}>
+            <PercentInput value={round2(tacPctParceiro)} disabled />
           </Field>
         </>
       )}
         </>
       )}
 
+      {erroForm && <div className="alert-banner" role="alert" data-testid="erro-form" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>{erroForm}</div>}
       <div className="preview-box" style={{ gridColumn: "1 / -1" }}>
         <strong>Resumo e prévia completa da operação</strong>
         <div className="preview-grid">
@@ -2241,7 +2315,25 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
 
 // "Produto" da operação = a modalidade informada no lançamento (Capital de Giro,
 // Desconto de Recebíveis, Crédito Próprio…). Operações sem modalidade ficam em "Sem produto".
-const PRODUTOS_PADRAO = ["Capital de Giro", "Desconto de Recebíveis", "Crédito Próprio", "Consignado", "Financiamento", "Cartão de Crédito"];
+const PRODUTOS_PADRAO = PRODUTOS_PADRAO_LISTA;
+// catálogo de produtos: os cadastrados + qualquer produto já usado em operações antigas
+function catalogoProdutos(db) {
+  const vistos = new Map();
+  [...(db.produtos || []).map((p) => p.nome), ...listaProdutos(db).filter((p) => p !== SEM_PRODUTO)].forEach((n) => {
+    if (n && !vistos.has(normTxt(n))) vistos.set(normTxt(n), n);
+  });
+  return [...vistos.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+// próximo número de operação, seguindo o padrão da última (prefixo + largura) — ex.: OP-0007
+function proximoNumeroOperacao(db) {
+  let melhor = null;
+  (db.operations || []).forEach((o) => {
+    const m = String(o.numero || "").trim().match(/^(\D*)(\d+)$/);
+    if (m && (!melhor || Number(m[2]) >= melhor.n)) melhor = { prefixo: m[1], n: Number(m[2]), largura: m[2].length };
+  });
+  if (!melhor) return "OP-0001";
+  return `${melhor.prefixo}${String(melhor.n + 1).padStart(melhor.largura, "0")}`;
+}
 const SEM_PRODUTO = "Sem produto";
 function opProduto(db, op) {
   const hon = (db.honorarios || []).find((h) => h.operacaoId === op.id);
@@ -2327,12 +2419,16 @@ function OperacoesPage({ db, mutate, user }) {
             <Search size={14} />
             <input className="input" placeholder="Buscar por nº, instituição, cliente ou produto…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <Select value={produtoFiltro} onChange={(e) => setProdutoFiltro(e.target.value)} aria-label="Filtrar por produto" data-testid="filtro-produto">
-            <option value="todos">Todos os produtos ({visibleOps.length})</option>
+          <div className="chip-row" data-testid="filtro-produto" role="group" aria-label="Filtrar por produto" style={{ flexBasis: "100%" }}>
+            <button type="button" className={`chip ${produtoFiltro === "todos" ? "chip-active" : ""}`} data-produto="todos" onClick={() => setProdutoFiltro("todos")}>
+              Todos <b>{visibleOps.length}</b>
+            </button>
             {produtosVisiveis.map((p) => (
-              <option key={p} value={p}>{p} ({contagemProdutos[normTxt(p)] || 0})</option>
+              <button type="button" key={p} className={`chip ${normTxt(produtoFiltro) === normTxt(p) ? "chip-active" : ""}`} data-produto={p} onClick={() => setProdutoFiltro(p)}>
+                {p} <b>{contagemProdutos[normTxt(p)] || 0}</b>
+              </button>
             ))}
-          </Select>
+          </div>
         </div>
       )}
       {aviso && <div className="toast" role="status" data-testid="toast"><Check size={15} /> {aviso}</div>}
@@ -2661,6 +2757,19 @@ function recebimentoRef(db, r) {
   return o ? `${rotulo} · ${o.numero} · ${cli}` : rotulo;
 }
 
+// categoria do recebimento na Agenda
+const CATEGORIAS_RECEBIMENTO = ["Recebimento Instituição", "Honorário do cliente", "TAC", "Crédito próprio"];
+function recebimentoCategoria(r) {
+  if (r.tipo === "banco") return "Recebimento Instituição";
+  if (r.tipo === "tac") return "TAC";
+  if (r.tipo === "credito" || r.tipo === "contrato") return "Crédito próprio";
+  return "Honorário do cliente";
+}
+const CATEGORIA_COR = { "Recebimento Instituição": "#2F5C8F", "Honorário do cliente": "#3F6B4F", TAC: "#6A4A8C", "Crédito próprio": "#8A6A2B" };
+function CategoriaTag({ nome }) {
+  return <span className="tag tag-cat" style={{ color: CATEGORIA_COR[nome] || "var(--text-muted)" }}>{nome}</span>;
+}
+
 // produto (modalidade) e natureza (Intermediação x Crédito próprio) de um recebimento
 function recebimentoProduto(db, r) {
   let op = null;
@@ -2786,7 +2895,7 @@ function RecebimentoForm({ db, editing, onSave, onCancel }) {
       <Field label="Tipo de recebimento">
         <Select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value, refId: "" })}>
           <option value="cliente">Honorário do cliente</option>
-          <option value="banco">Receita da instituição financeira</option>
+          <option value="banco">Recebimento Instituição</option>
         </Select>
       </Field>
       <Field label={form.tipo === "cliente" ? "Honorário vinculado" : "Operação vinculada"}>
@@ -2840,7 +2949,8 @@ function AgendaPage({ db, mutate, user }) {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState("todos");
   const [produtoFiltro, setProdutoFiltro] = useState("todos");
-  const [agrupar, setAgrupar] = useState(true);
+  const [agrupar, setAgrupar] = useState("produto");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("todas");
 
   const visibleHon = visibleHonorarios(db, user);
   const visibleHonIds = new Set(visibleHon.map((h) => h.id));
@@ -2909,18 +3019,21 @@ function AgendaPage({ db, mutate, user }) {
   };
 
   const withStatus = list
-    .map((r) => ({ ...r, status: recebimentoStatus(r), ...recebimentoProduto(db, r) }))
+    .map((r) => ({ ...r, status: recebimentoStatus(r), categoria: recebimentoCategoria(r), ...recebimentoProduto(db, r) }))
     .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
   const produtosAgenda = [...new Map(withStatus.map((r) => [normTxt(r.produto), r.produto])).values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
-  const porProduto = produtoFiltro === "todos" ? withStatus : withStatus.filter((r) => normTxt(r.produto) === normTxt(produtoFiltro));
+  const porProduto = withStatus
+    .filter((r) => produtoFiltro === "todos" || normTxt(r.produto) === normTxt(produtoFiltro))
+    .filter((r) => categoriaFiltro === "todas" || r.categoria === categoriaFiltro);
   const counts = porProduto.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] || 0) + 1 }), {});
   // "Todos" mostra só o que ainda está em aberto; o que já foi recebido fica na aba "Recebidos"
   const filtered = filter === "todos" ? porProduto.filter((r) => !r.recebido) : porProduto.filter((r) => r.status === filter);
   const totalFiltrado = filtered.reduce((s, r) => s + (Number(r.valor) || 0), 0);
-  const grupos = agrupar
-    ? [...filtered.reduce((m, r) => { const k = normTxt(r.produto); if (!m.has(k)) m.set(k, { produto: r.produto, itens: [] }); m.get(k).itens.push(r); return m; }, new Map()).values()]
-        .sort((a, b) => a.produto.localeCompare(b.produto, "pt-BR"))
-    : [{ produto: null, itens: filtered }];
+  const chaveGrupo = (r) => (agrupar === "categoria" ? r.categoria : r.produto);
+  const grupos = agrupar !== "nenhum"
+    ? [...filtered.reduce((m, r) => { const k = normTxt(chaveGrupo(r)); if (!m.has(k)) m.set(k, { nome: chaveGrupo(r), itens: [] }); m.get(k).itens.push(r); return m; }, new Map()).values()]
+        .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"))
+    : [{ nome: null, itens: filtered }];
 
   const save = (data) => {
     mutate((d) => {
@@ -2985,9 +3098,20 @@ function AgendaPage({ db, mutate, user }) {
             {produtosAgenda.map((p) => <option key={p} value={p}>{p}</option>)}
           </Select>
         </label>
-        <label className="checkbox-row toolbar-check">
-          <input type="checkbox" checked={agrupar} onChange={(e) => setAgrupar(e.target.checked)} data-testid="agenda-agrupar" />
-          <span>Separar por produto</span>
+        <label className="toolbar-field">
+          <span>Categoria</span>
+          <Select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)} data-testid="agenda-filtro-categoria">
+            <option value="todas">Todas as categorias</option>
+            {CATEGORIAS_RECEBIMENTO.map((c) => <option key={c} value={c}>{c}</option>)}
+          </Select>
+        </label>
+        <label className="toolbar-field">
+          <span>Separar por</span>
+          <Select value={agrupar} onChange={(e) => setAgrupar(e.target.value)} data-testid="agenda-agrupar">
+            <option value="produto">Produto</option>
+            <option value="categoria">Categoria</option>
+            <option value="nenhum">Sem separação</option>
+          </Select>
         </label>
         <span className="muted toolbar-total">
           {filter === "recebido" ? "Total recebido" : "Total a receber"}: <strong>{fmtBRL(totalFiltrado)}</strong>
@@ -3004,6 +3128,7 @@ function AgendaPage({ db, mutate, user }) {
             <tr>
               <th>Vencimento</th>
               <th>Produto</th>
+              <th>Categoria</th>
               <th>Referência</th>
               <th>Descrição</th>
               <th>Valor</th>
@@ -3013,11 +3138,11 @@ function AgendaPage({ db, mutate, user }) {
           </thead>
           <tbody>
             {grupos.map((g) => (
-              <React.Fragment key={g.produto || "todos"}>
-                {g.produto && (
+              <React.Fragment key={g.nome || "todos"}>
+                {g.nome && (
                   <tr className="group-row" data-testid="agenda-grupo">
-                    <td colSpan={7}>
-                      <ProdutoTag nome={g.produto} />
+                    <td colSpan={8}>
+                      {agrupar === "categoria" ? <CategoriaTag nome={g.nome} /> : <ProdutoTag nome={g.nome} />}
                       <span className="muted"> {g.itens.length} recebimento(s) · {fmtBRL(g.itens.reduce((s, r) => s + (Number(r.valor) || 0), 0))}</span>
                     </td>
                   </tr>
@@ -3027,8 +3152,8 @@ function AgendaPage({ db, mutate, user }) {
                 <td>{new Date(r.dataVencimento + "T00:00:00").toLocaleDateString("pt-BR")}</td>
                 <td data-testid="col-produto">
                   <ProdutoTag nome={r.produto} />
-                  <small className="natureza">{r.natureza}</small>
                 </td>
+                <td data-testid="col-categoria"><CategoriaTag nome={r.categoria} /></td>
                 <td>{refLabel(r)}</td>
                 <td>
                   {r.descricao || "—"}
@@ -9281,6 +9406,18 @@ export function AppStyles() {
       .tag-teal { background: #DFF0EE; color: #2D6F69; }
       .tag-sand { background: #F3EAD7; color: #8A6A2B; }
       .tag-rose { background: #F8E4E4; color: #9A4545; }
+      .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+      .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
+      .chip:hover { border-color: var(--brass); }
+      .chip-active { background: var(--ink); color: #FFF; border-color: var(--ink); }
+      .chip-active b { background: rgba(255,255,255,0.18); color: #FFF; }
+      .agenda-table .tag { white-space: nowrap; }
+      .tag-cat { background: transparent; border: 1px solid currentColor; margin-left: 0; font-weight: 600; }
+      .money-suffix { display: flex; align-items: center; padding: 0 12px 0 0; font-size: 13px; color: var(--text-muted); font-weight: 600; }
+      .money-input-wrap.is-disabled { background: #F3F1EA; }
+      .money-input-wrap.is-disabled .money-input { color: var(--text-muted); }
+      .percent-wrap .money-input { text-align: left; }
       .toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin: 4px 0 14px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
       .toolbar-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted); }
       .toolbar-field select { min-width: 180px; }
