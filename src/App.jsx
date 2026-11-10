@@ -936,6 +936,131 @@ function InstitutionsList({ items, categories, onAdd, onEdit, onDelete }) {
   );
 }
 
+// ---- Clientes: nome + CPF/CNPJ + telefone ----
+const soDigitos = (s) => String(s || "").replace(/\D/g, "");
+function maskDocumento(v) {
+  const d = soDigitos(v).slice(0, 14);
+  if (d.length <= 11) {
+    return d.replace(/^(\d{3})(\d)/, "$1.$2").replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d)/, ".$1-$2");
+  }
+  return d.replace(/^(\d{2})(\d)/, "$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d)/, ".$1/$2").replace(/(\d{4})(\d)/, "$1-$2");
+}
+function maskTelefone(v) {
+  const d = soDigitos(v).slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+const tipoDocumento = (v) => {
+  const n = soDigitos(v).length;
+  return n === 11 ? "CPF" : n === 14 ? "CNPJ" : null;
+};
+function validarClienteCadastro(f) {
+  if (!f.nome.trim()) return "Informe o nome / razão social.";
+  if (soDigitos(f.documento) && !tipoDocumento(f.documento)) return "CPF deve ter 11 dígitos e CNPJ 14 dígitos.";
+  const t = soDigitos(f.telefone).length;
+  if (t && t !== 10 && t !== 11) return "Telefone deve ter DDD + 8 ou 9 dígitos.";
+  return null;
+}
+
+function ClientsList({ items, onAdd, onEdit, onDelete }) {
+  const blank = { nome: "", documento: "", telefone: "" };
+  const [form, setForm] = useState(blank);
+  const [erro, setErro] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(blank);
+  const [editErro, setEditErro] = useState("");
+  const [busca, setBusca] = useState("");
+
+  const norm = (s) => String(s || "").toLowerCase();
+  const filtrados = busca.trim()
+    ? items.filter((c) => norm(c.nome).includes(norm(busca)) || soDigitos(c.documento).includes(soDigitos(busca)) && soDigitos(busca) !== "" || soDigitos(c.telefone).includes(soDigitos(busca)) && soDigitos(busca) !== "")
+    : items;
+
+  const fields = (f, setF) => (
+    <>
+      <TextInput placeholder="Nome / razão social" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} required />
+      <TextInput placeholder="CPF ou CNPJ" inputMode="numeric" value={f.documento} onChange={(e) => setF({ ...f, documento: maskDocumento(e.target.value) })} />
+      <TextInput placeholder="Telefone com DDD" inputMode="tel" value={f.telefone} onChange={(e) => setF({ ...f, telefone: maskTelefone(e.target.value) })} />
+    </>
+  );
+
+  return (
+    <div className="panel">
+      <h3 className="panel-title">Clientes</h3>
+      <p className="panel-note">Cadastro com nome ou razão social, CPF/CNPJ e telefone de contato.</p>
+      <form
+        className="inline-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const msg = validarClienteCadastro(form);
+          if (msg) return setErro(msg);
+          setErro("");
+          onAdd({ nome: form.nome.trim(), documento: form.documento, telefone: form.telefone });
+          setForm(blank);
+        }}
+      >
+        {fields(form, setForm)}
+        <Btn type="submit">
+          <Plus size={14} /> Adicionar
+        </Btn>
+      </form>
+      {erro && <p className="panel-note" style={{ color: "var(--negative, #9a3b3b)" }}>{erro}</p>}
+      {items.length > 6 && (
+        <TextInput placeholder="Buscar por nome, CPF/CNPJ ou telefone" value={busca} onChange={(e) => setBusca(e.target.value)} style={{ marginBottom: 8 }} />
+      )}
+      {items.length === 0 ? (
+        <EmptyState text="Nenhum registro ainda." />
+      ) : (
+        <ul className="simple-list">
+          {filtrados.map((it) =>
+            editingId === it.id ? (
+              <li key={it.id}>
+                <span style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap" }}>{fields(editForm, setEditForm)}</span>
+                <span className="confirm-row">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      const msg = validarClienteCadastro(editForm);
+                      if (msg) return setEditErro(msg);
+                      setEditErro("");
+                      onEdit(it.id, { nome: editForm.nome.trim(), documento: editForm.documento, telefone: editForm.telefone });
+                      setEditingId(null);
+                    }}
+                  >
+                    <Check size={13} />
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setEditingId(null); setEditErro(""); }}>
+                    <X size={13} />
+                  </button>
+                </span>
+                {editErro && <span className="panel-note" style={{ color: "var(--negative, #9a3b3b)", flexBasis: "100%" }}>{editErro}</span>}
+              </li>
+            ) : (
+              <li key={it.id}>
+                <span>
+                  {it.nome}
+                  {it.documento && <Tag>{tipoDocumento(it.documento) || "Doc."} {it.documento}</Tag>}
+                  {it.telefone && <Tag>{it.telefone}</Tag>}
+                </span>
+                <RowActions
+                  onEdit={() => {
+                    setEditingId(it.id);
+                    setEditErro("");
+                    setEditForm({ nome: it.nome, documento: it.documento || "", telefone: it.telefone || "" });
+                  }}
+                  onDelete={() => onDelete(it.id)}
+                />
+              </li>
+            )
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function CollaboratorsList({ items, allCollaborators, onAdd, onEdit, onDelete, scopeNote, canManageRole }) {
   const blank = { nome: "", papel: "colaborador", liderId: "" };
   const [form, setForm] = useState(blank);
@@ -1474,13 +1599,11 @@ function CadastrosPage({ db, mutate, user }) {
         />
       )}
       {tab === "clientes" && (
-        <EditableSimpleList
-          title="Clientes"
+        <ClientsList
           items={db.clients}
-          onAdd={(nome) => mutate((d) => ({ ...d, clients: [...d.clients, { id: uid(), nome }] }))}
-          onEdit={(id, nome) => editIn("clients")(id, { nome })}
+          onAdd={(c) => mutate((d) => ({ ...d, clients: [...d.clients, { id: uid(), ...c }] }))}
+          onEdit={editIn("clients")}
           onDelete={delFrom("clients")}
-          placeholder="Nome do cliente"
         />
       )}
       {tab === "parceiros" && (
@@ -1603,13 +1726,17 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     if (base === "" || base === undefined) return merged;
     return { ...merged, valorParceiro: (Number(base) * (Number(partner.percentual) / 100)).toFixed(2) };
   };
-  const recalcImposto = (merged) => {
-    if (impostoTocado) return merged;
+  // O imposto acompanha o honorário (padrão % sobre o bruto). Só deixa de recalcular se o
+  // usuário digitou um valor de exceção (diferente do que o padrão daria para o honorário anterior).
+  const recalcImposto = (merged, prev) => {
     const impostoPadrao = db.metas?.impostoPadrao || 0;
     if (merged.valorHonorario === "" || merged.valorHonorario === undefined) return merged;
+    const padraoAnterior = (Number(prev?.valorHonorario) || 0) * (impostoPadrao / 100);
+    const aindaPadrao = prev?.imposto === "" || prev?.imposto === undefined || Math.abs((Number(prev?.imposto) || 0) - padraoAnterior) < 0.011;
+    if (impostoTocado && !aindaPadrao) return merged;
     return { ...merged, imposto: (Number(merged.valorHonorario) * (impostoPadrao / 100)).toFixed(2) };
   };
-  const updateForm = (patch) => setForm((prev) => recalcImposto(recalcParceiro({ ...prev, ...patch })));
+  const updateForm = (patch) => setForm((prev) => recalcImposto(recalcParceiro({ ...prev, ...patch }), prev));
 
   const onValorAprovadoChange = (v) => updateForm({ valorAprovado: v, valorLiberado: form.valorLiberado === "" ? v : form.valorLiberado });
 
@@ -1735,8 +1862,13 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>
         {form.creditoProprio ? "Dados do crédito" : "Honorário do cliente"}
       </h3>
-      <Field label="Modalidade (tipo de operação)">
-        <TextInput value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} placeholder="Ex.: Capital de Giro, Desconto de Recebíveis…" />
+      <Field label="Produto · Modalidade (tipo de operação)" hint="Vira a tag e o filtro da lista de Operações">
+        <TextInput list="lista-produtos" value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} placeholder="Ex.: Capital de Giro, Desconto de Recebíveis…" />
+        <datalist id="lista-produtos">
+          {[...new Set([...PRODUTOS_PADRAO, ...listaProdutos(db).filter((p) => p !== SEM_PRODUTO)])].map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
       </Field>
       {!form.creditoProprio && (
       <Field
@@ -1965,10 +2097,30 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
   );
 }
 
+// "Produto" da operação = a modalidade informada no lançamento (Capital de Giro,
+// Desconto de Recebíveis, Crédito Próprio…). Operações sem modalidade ficam em "Sem produto".
+const PRODUTOS_PADRAO = ["Capital de Giro", "Desconto de Recebíveis", "Crédito Próprio", "Consignado", "Financiamento", "Cartão de Crédito"];
+const SEM_PRODUTO = "Sem produto";
+function opProduto(db, op) {
+  const hon = (db.honorarios || []).find((h) => h.operacaoId === op.id);
+  const m = String(hon?.modalidade || "").trim();
+  if (m) return m;
+  return op.creditoProprio ? "Crédito Próprio" : SEM_PRODUTO;
+}
+function listaProdutos(db) {
+  const vistos = new Map();
+  (db.operations || []).forEach((o) => {
+    const p = opProduto(db, o);
+    if (!vistos.has(normTxt(p))) vistos.set(normTxt(p), p);
+  });
+  return [...vistos.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
 function OperacoesPage({ db, mutate, user }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
+  const [produtoFiltro, setProdutoFiltro] = useState("todos");
   const institutionName = (id) => db.institutions.find((b) => b.id === id)?.nome || "—";
   const clientName = (id) => db.clients.find((c) => c.id === id)?.nome || "—";
   const collabName = (id) => db.collaborators.find((c) => c.id === id)?.nome || "—";
@@ -2002,9 +2154,16 @@ function OperacoesPage({ db, mutate, user }) {
   const editingHon = editingId ? db.honorarios.find((h) => h.operacaoId === editingId) : null;
 
   const term = search.trim().toLowerCase();
+  const porProduto = produtoFiltro === "todos" ? visibleOps : visibleOps.filter((o) => normTxt(opProduto(db, o)) === normTxt(produtoFiltro));
   const filteredOperations = term
-    ? visibleOps.filter((o) => `${o.numero} ${institutionName(o.instituicaoId)} ${clientName(o.clienteId)}`.toLowerCase().includes(term))
-    : visibleOps;
+    ? porProduto.filter((o) => `${o.numero} ${institutionName(o.instituicaoId)} ${clientName(o.clienteId)} ${opProduto(db, o)}`.toLowerCase().includes(term))
+    : porProduto;
+  const contagemProdutos = visibleOps.reduce((acc, o) => {
+    const k = normTxt(opProduto(db, o));
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+  const produtosVisiveis = listaProdutos({ ...db, operations: visibleOps });
 
   return (
     <div>
@@ -2018,9 +2177,17 @@ function OperacoesPage({ db, mutate, user }) {
         <OperacaoCompletaForm db={db} editingOp={editingOp} editingHon={editingHon} user={user} onSave={save} onCancel={() => { setShowForm(false); setEditingId(null); }} />
       )}
       {db.operations.length > 0 && (
-        <div className="search-box">
-          <Search size={14} />
-          <input className="input" placeholder="Buscar por nº, instituição ou cliente…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+          <div className="search-box" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+            <Search size={14} />
+            <input className="input" placeholder="Buscar por nº, instituição, cliente ou produto…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <Select value={produtoFiltro} onChange={(e) => setProdutoFiltro(e.target.value)} aria-label="Filtrar por produto" data-testid="filtro-produto">
+            <option value="todos">Todos os produtos ({visibleOps.length})</option>
+            {produtosVisiveis.map((p) => (
+              <option key={p} value={p}>{p} ({contagemProdutos[normTxt(p)] || 0})</option>
+            ))}
+          </Select>
         </div>
       )}
       {visibleOps.length === 0 ? (
@@ -2033,6 +2200,7 @@ function OperacoesPage({ db, mutate, user }) {
             <thead>
               <tr>
                 <th>Nº operação</th>
+                <th>Produto</th>
                 <th>Instituição</th>
                 <th>Cliente</th>
                 <th>Data crédito</th>
@@ -2052,10 +2220,8 @@ function OperacoesPage({ db, mutate, user }) {
                 return (
                   <tr key={o.id}>
                     <td>{o.numero}</td>
-                    <td>
-                      {institutionName(o.instituicaoId)}
-                      {o.creditoProprio && <Tag tone="brass">Crédito próprio</Tag>}
-                    </td>
+                    <td><Tag tone={o.creditoProprio ? "brass" : null}>{opProduto(db, o)}</Tag></td>
+                    <td>{institutionName(o.instituicaoId)}</td>
                     <td>{clientName(o.clienteId)}</td>
                     <td>{hon?.dataCredito ? new Date(hon.dataCredito + "T00:00:00").toLocaleDateString("pt-BR") : "—"}</td>
                     <td className="num">{o.creditoProprio ? <span title="Total que o cliente vai pagar">{fmtBRL(o.valorTotalCliente)}</span> : fmtBRL(o.valorAReceber)}</td>
@@ -2198,9 +2364,14 @@ function fluxoCaixaMes(db, ym) {
   // Operações, sem passar por um lançamento manual na Agenda — evita contar
   // duas vezes quando as duas fontes apontam pra mesma operação.
   const opsComAgenda = new Set((db.recebimentos || []).filter((r) => r.tipo === "banco").map((r) => r.refId));
-  const entradasBancoDireto = (db.operations || [])
-    .filter((o) => o.recebidoBanco && monthKey(o.dataRecebimentoBanco) === ym && !opsComAgenda.has(o.id))
-    .reduce((s, o) => s + (Number(o.valorAReceber) || 0), 0);
+  const entradasBancoDireto =
+    (db.operations || [])
+      .filter((o) => o.recebidoBanco && monthKey(o.dataRecebimentoBanco) === ym && !opsComAgenda.has(o.id))
+      .reduce((s, o) => s + (Number(o.valorAReceber) || 0), 0) +
+    // TAC (parte Adventus) com baixa dada na Agenda
+    (db.operations || [])
+      .filter((o) => o.tacAtivo && o.tacRecebido && monthKey(o.tacDataRecebimento) === ym)
+      .reduce((s, o) => s + ((Number(o.tacValorGeral) || 0) * (Number(o.tacPctAdventus) || 0)) / 100, 0);
 
   // crédito próprio: entra o que foi pago nas parcelas; sai o principal liberado
   const cred = creditoCaixaMes(db, ym);
@@ -2302,9 +2473,10 @@ function caixaRecebiveisMes(db, ym) {
 }
 
 // o recebimento aparece para quem enxerga o honorário/operação a que ele pertence
-function recebimentoVisivel(db, r, visibleHonIds) {
+function recebimentoVisivel(db, r, visibleHonIds, user) {
   if (r.tipo === "cliente") return visibleHonIds.has(r.refId);
-  if (r.tipo === "credito") return (db.honorarios || []).some((h) => h.operacaoId === r.refId && visibleHonIds.has(h.id));
+  if (r.tipo === "credito" || r.tipo === "tac") return (db.honorarios || []).some((h) => h.operacaoId === r.refId && visibleHonIds.has(h.id));
+  if (r.tipo === "contrato") return !user || user.papel === "diretora"; // contratos de crédito próprio são só da diretora
   return true;
 }
 
@@ -2340,6 +2512,29 @@ function agendaAutomatica(db) {
       dataVencimento: h.dataCredito, recebido: false, dataRecebimento: null,
     });
   });
+  // TAC (parte Adventus): um recebimento por operação com TAC
+  (db.operations || []).forEach((o) => {
+    if (!o.tacAtivo) return;
+    const valor = round2(((Number(o.tacValorGeral) || 0) * (Number(o.tacPctAdventus) || 0)) / 100);
+    const venc = o.dataRecebimentoBanco || opDataCredito(db, o);
+    if (valor <= 0 || !venc) return;
+    out.push({
+      id: `auto-tac-${o.id}`, auto: true, tipo: "tac", refId: o.id,
+      descricao: "TAC (parte Adventus)", valor, dataVencimento: venc,
+      recebido: !!o.tacRecebido, dataRecebimento: o.tacRecebido ? o.tacDataRecebimento || venc : null,
+    });
+  });
+  // contratos do módulo antigo de crédito próprio: uma linha por parcela
+  (db.creditos || []).forEach((c) =>
+    (c.parcelas || []).forEach((p) => {
+      if (!p.vencimento || !(Number(p.valor) > 0)) return;
+      out.push({
+        id: `auto-contrato-${c.id}-${p.n}`, auto: true, tipo: "contrato", refId: c.id, n: p.n,
+        descricao: `Parcela ${p.n}/${(c.parcelas || []).length}`, valor: Number(p.valor), dataVencimento: p.vencimento,
+        recebido: !!p.pago, dataRecebimento: p.pago ? p.dataPagamento || p.vencimento : null,
+      });
+    })
+  );
   // crédito próprio: uma linha por parcela que o cliente vai pagar
   opsCreditoProprio(db).forEach((o) => {
     const ps = o.recebiveis || [];
@@ -2433,7 +2628,7 @@ function AgendaPage({ db, mutate, user }) {
 
   const visibleHon = visibleHonorarios(db, user);
   const visibleHonIds = new Set(visibleHon.map((h) => h.id));
-  const list = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds));
+  const list = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds, user));
 
   // dar baixa numa linha automática: o repasse grava na própria operação; o
   // honorário vira um recebimento real (que passa a valer no fluxo de caixa).
@@ -2447,6 +2642,19 @@ function AgendaPage({ db, mutate, user }) {
           ...d,
           operations: d.operations.map((o) =>
             o.id === r.refId ? { ...o, recebiveis: (o.recebiveis || []).map((p) => (p.n === r.n ? { ...p, pago: true, dataPagamento: data } : p)) } : o
+          ),
+        };
+      }
+      if (r.tipo === "tac") {
+        return { ...d, operations: d.operations.map((o) => (o.id === r.refId ? { ...o, tacRecebido: true, tacDataRecebimento: data } : o)) };
+      }
+      if (r.tipo === "contrato") {
+        return {
+          ...d,
+          creditos: (d.creditos || []).map((c) =>
+            c.id === r.refId
+              ? { ...c, parcelas: c.parcelas.map((p) => (p.n === r.n ? { ...p, pago: true, dataPagamento: data, valorPago: round2(Number(p.valor) || 0) } : p)) }
+              : c
           ),
         };
       }
@@ -2464,9 +2672,16 @@ function AgendaPage({ db, mutate, user }) {
       const h = db.honorarios.find((x) => x.id === r.refId);
       return h ? `Honorário · ${db.clients.find((c) => c.id === h.clienteId)?.nome || "—"}` : "Honorário removido";
     }
+    if (r.tipo === "contrato") {
+      const c = (db.creditos || []).find((x) => x.id === r.refId);
+      return c ? `Contrato de crédito · ${c.numero || ""} · ${c.nome || "—"}` : "Contrato removido";
+    }
     const o = db.operations.find((x) => x.id === r.refId);
-    if (r.tipo === "credito") return o ? `Crédito próprio · ${o.numero} · ${db.clients.find((c) => c.id === o.clienteId)?.nome || "—"}` : "Operação removida";
-    return o ? `Operação · ${o.numero}` : "Operação removida";
+    const cli = o ? db.clients.find((c) => c.id === o.clienteId)?.nome || "—" : "";
+    if (r.tipo === "tac") return o ? `TAC · ${o.numero} · ${cli}` : "Operação removida";
+    if (r.tipo === "credito") return o ? `Crédito próprio · ${o.numero} · ${cli}` : "Operação removida";
+    const inst = o ? db.institutions.find((b) => b.id === o.instituicaoId)?.nome : "";
+    return o ? `Instituição · ${o.numero} · ${cli}${inst ? ` (${inst})` : ""}` : "Operação removida";
   };
 
   const withStatus = list.map((r) => ({ ...r, status: recebimentoStatus(r) })).sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
@@ -2498,7 +2713,7 @@ function AgendaPage({ db, mutate, user }) {
         <div>
           <h2>Agenda de recebimentos</h2>
           <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
-            Os recebimentos futuros das Operações (repasse da instituição, honorário do cliente e pagamentos do cliente no crédito próprio) aparecem aqui automaticamente, nas datas cadastradas na operação.
+            Os recebimentos futuros das Operações (repasse da instituição, honorário do cliente, TAC, pagamentos do cliente no crédito próprio e parcelas de contratos de crédito) aparecem aqui automaticamente, nas datas cadastradas na operação.
             Use "Novo recebimento" só para parcelas ou lançamentos extras.
           </p>
         </div>
@@ -3286,8 +3501,9 @@ function instituicaoMonthly(db, honorarios, instituicaoId) {
 
 function ClientesRankingPanel({ db, user }) {
   const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const [selecionado, setSelecionado] = useState("");
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
 
@@ -3308,12 +3524,7 @@ function ClientesRankingPanel({ db, user }) {
           <h2 style={{ fontSize: 16 }}>Clientes que mais performam</h2>
           <p className="muted">Ranking por honorário líquido gerado — inclui recorrência (mais de uma operação fechada).</p>
         </div>
-        <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-          <option value="tudo">Todo o período</option>
-          <option value="mes">Este mês</option>
-          <option value="trimestre">Este trimestre</option>
-          <option value="ano">Este ano</option>
-        </Select>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
       </div>
 
       <div className="cards-grid">
@@ -3376,8 +3587,9 @@ function ClientesRankingPanel({ db, user }) {
 
 function ParceirosRankingPanel({ db, user }) {
   const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const [selecionado, setSelecionado] = useState("");
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
 
@@ -3398,12 +3610,7 @@ function ParceirosRankingPanel({ db, user }) {
           <h2 style={{ fontSize: 16 }}>Parceiros que mais performam</h2>
           <p className="muted">Ranking por repasse recebido — volume de crédito liberado através de cada parceiro.</p>
         </div>
-        <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-          <option value="tudo">Todo o período</option>
-          <option value="mes">Este mês</option>
-          <option value="trimestre">Este trimestre</option>
-          <option value="ano">Este ano</option>
-        </Select>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
       </div>
 
       <div className="cards-grid">
@@ -3462,8 +3669,9 @@ function ParceirosRankingPanel({ db, user }) {
 
 function InstituicoesRankingPanel({ db, user }) {
   const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const [selecionado, setSelecionado] = useState("");
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
 
@@ -3484,12 +3692,7 @@ function InstituicoesRankingPanel({ db, user }) {
           <h2 style={{ fontSize: 16 }}>Instituições que mais performam</h2>
           <p className="muted">Ranking por receita de repasse — volume de crédito aprovado por instituição financeira.</p>
         </div>
-        <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-          <option value="tudo">Todo o período</option>
-          <option value="mes">Este mês</option>
-          <option value="trimestre">Este trimestre</option>
-          <option value="ano">Este ano</option>
-        </Select>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
       </div>
 
       <div className="cards-grid">
@@ -3572,7 +3775,13 @@ function RelatoriosPage({ db, user }) {
 
 /* ---------------------------- Dashboard ---------------------------- */
 
-function periodRange(preset) {
+function periodRange(preset, custom) {
+  if (preset === "custom") {
+    const ini = custom?.start || "";
+    const fim = custom?.end || "";
+    if (!ini && !fim) return null;
+    return { start: ini || "0000-01-01", end: fim || "9999-12-31" };
+  }
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth();
@@ -3584,6 +3793,33 @@ function periodRange(preset) {
   }
   if (preset === "ano") return { start: toISO(new Date(y, 0, 1)), end: toISO(new Date(y, 11, 31)) };
   return null;
+}
+
+// seletor de período dos relatórios: presets + intervalo de datas personalizado
+function PeriodSelect({ period, setPeriod, custom, setCustom, semTudo }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <Select value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Período">
+        {!semTudo && <option value="tudo">Todo o período</option>}
+        <option value="mes">Este mês</option>
+        <option value="trimestre">Este trimestre</option>
+        <option value="ano">Este ano</option>
+        <option value="custom">Datas personalizadas…</option>
+      </Select>
+      {period === "custom" && (
+        <>
+          <label className="muted" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+            De
+            <TextInput type="date" data-f="periodo-de" value={custom.start} max={custom.end || undefined} onChange={(e) => setCustom({ ...custom, start: e.target.value })} />
+          </label>
+          <label className="muted" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+            até
+            <TextInput type="date" data-f="periodo-ate" value={custom.end} min={custom.start || undefined} onChange={(e) => setCustom({ ...custom, end: e.target.value })} />
+          </label>
+        </>
+      )}
+    </div>
+  );
 }
 
 function csvEscape(v) {
@@ -3772,6 +4008,46 @@ function creditoStats(c, hoje = todayISO()) {
     nPagas: pagas.length,
     nParcelas: ps.length,
     status,
+  };
+}
+
+// carteira das operações de crédito próprio lançadas em Operações (parcelas do cliente)
+function carteiraCreditoOps(db, hoje = todayISO()) {
+  const agg = { operacoes: 0, emprestado: 0, totalReceber: 0, recebido: 0, saldoAberto: 0, valorAtrasado: 0, nAtrasadas: 0, ganhoContratado: 0 };
+  opsCreditoProprio(db).forEach((o) => {
+    const ps = o.recebiveis || [];
+    if (!ps.length) return;
+    const total = ps.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const recebido = ps.filter((p) => p.pago).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const atrasadas = ps.filter((p) => !p.pago && p.vencimento && p.vencimento < hoje);
+    agg.operacoes += 1;
+    agg.emprestado += opPrincipal(db, o);
+    agg.totalReceber += total;
+    agg.recebido += recebido;
+    agg.saldoAberto += total - recebido;
+    agg.valorAtrasado += atrasadas.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    agg.nAtrasadas += atrasadas.length;
+    agg.ganhoContratado += total - opPrincipal(db, o);
+  });
+  Object.keys(agg).forEach((k) => { if (k !== "operacoes" && k !== "nAtrasadas") agg[k] = round2(agg[k]); });
+  return agg;
+}
+
+// quadro do Painel geral: soma contratos do módulo antigo + operações de crédito próprio
+function creditoProprioResumo(db, hoje = todayISO()) {
+  const a = carteiraCredito(db, hoje);
+  const b = carteiraCreditoOps(db, hoje);
+  return {
+    itens: a.contratos + b.operacoes,
+    contratos: a.contratos,
+    operacoes: b.operacoes,
+    emprestado: round2(a.emprestado + b.emprestado),
+    totalReceber: round2(a.totalReceber + b.totalReceber),
+    recebido: round2(a.recebido + b.recebido),
+    saldoAberto: round2(a.saldoAberto + b.saldoAberto),
+    valorAtrasado: round2(a.valorAtrasado + b.valorAtrasado),
+    nAtrasadas: a.nAtrasadas + b.nAtrasadas,
+    ganhoContratado: round2(a.ganhoContratado + b.ganhoContratado),
   };
 }
 
@@ -4432,6 +4708,7 @@ function CreditoPage({ db, mutate, user }) {
 
 function Dashboard({ db, user }) {
   const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const clientName = (id) => db.clients.find((c) => c.id === id)?.nome || "—";
   const collabName = (id) => db.collaborators.find((c) => c.id === id)?.nome || "—";
   const institutionName = (opId) => {
@@ -4440,7 +4717,7 @@ function Dashboard({ db, user }) {
   };
   const opNumber = (id) => db.operations.find((o) => o.id === id)?.numero || "—";
 
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
   const rows = useMemo(() => honorarios.map((h) => ({ ...h, ...computeHonorario(h) })), [honorarios]);
@@ -4483,7 +4760,7 @@ function Dashboard({ db, user }) {
   const receitaInstituicoes = operationsInPeriod.reduce((s, o) => s + (Number(o.valorAReceber) || 0), 0);
 
   const visibleHonIds = new Set(rows.map((r) => r.id));
-  const recebimentos = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds));
+  const recebimentos = agendaCompleta(db).filter((r) => recebimentoVisivel(db, r, visibleHonIds, user));
   const statusCounts = recebimentos.reduce((acc, r) => {
     const s = recebimentoStatus(r);
     acc[s] = (acc[s] || 0) + 1;
@@ -4506,7 +4783,7 @@ function Dashboard({ db, user }) {
   const tacAdventusTotal = operationsInPeriod.filter((o) => o.tacAtivo).reduce((s, o) => s + (Number(o.tacValorGeral) || 0) * (Number(o.tacPctAdventus) || 0) / 100, 0);
 
   const isDir = user.papel === "diretora";
-  const carteira = isDir ? carteiraCredito(db) : null;
+  const carteira = isDir ? creditoProprioResumo(db) : null;
   const receitaCreditoPer = isDir ? receitaCreditoPeriodo(db, bounds?.start, bounds?.end) : 0;
   const share = shareReceitaCanais([
     { id: "honorarios", label: "Honorários de clientes", valor: totals.honorario },
@@ -4514,7 +4791,14 @@ function Dashboard({ db, user }) {
     { id: "tac", label: "TAC (parte Adventus)", valor: tacAdventusTotal },
     { id: "credito", label: "Crédito próprio (juros e encargos)", valor: receitaCreditoPer },
   ]);
-  const periodoLabel = { tudo: "todo o período", mes: "este mês", trimestre: "este trimestre", ano: "este ano" }[period];
+  const periodoLabel =
+    period === "custom" && bounds
+      ? periodoCustom.start && periodoCustom.end
+        ? `de ${fmtDateBR(periodoCustom.start)} a ${fmtDateBR(periodoCustom.end)}`
+        : periodoCustom.start
+        ? `a partir de ${fmtDateBR(periodoCustom.start)}`
+        : `até ${fmtDateBR(periodoCustom.end)}`
+      : { tudo: "todo o período", mes: "este mês", trimestre: "este trimestre", ano: "este ano", custom: "todo o período" }[period];
 
   const cards = [
     { label: "Operações lançadas", value: operationsInPeriod.length },
@@ -4528,12 +4812,6 @@ function Dashboard({ db, user }) {
     { label: "TAC — total (Adventus)", value: fmtBRL(tacAdventusTotal) },
     { label: "Comissão de líderes", value: fmtBRL(totals.comissaoLider) },
     { label: "Comissão + bônus de consultores", value: fmtBRL(totalComissaoConsultores) },
-    ...(isDir && carteira.contratos > 0
-      ? [
-          { label: "Crédito próprio — emprestado", value: fmtBRL(carteira.emprestado) },
-          { label: "Crédito próprio — a receber", value: fmtBRL(carteira.saldoAberto) },
-        ]
-      : []),
     { label: "Resultado líquido Adventus", value: fmtBRL(resultadoLiquidoAdventus), highlight: true },
   ];
 
@@ -4576,12 +4854,7 @@ function Dashboard({ db, user }) {
       <div className="page-header no-print">
         <h2>Painel geral{user.papel !== "diretora" ? " — seus resultados" : ""}</h2>
         <div style={{ display: "flex", gap: 8 }}>
-          <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-            <option value="tudo">Todo o período</option>
-            <option value="mes">Este mês</option>
-            <option value="trimestre">Este trimestre</option>
-            <option value="ano">Este ano</option>
-          </Select>
+          <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
           <Btn variant="ghost" onClick={exportCSV}>
             <Download size={14} /> Exportar CSV
           </Btn>
@@ -4606,7 +4879,7 @@ function Dashboard({ db, user }) {
         <div className="alert-banner no-print">
           <Bell size={16} />
           <span>
-            {carteira.nAtrasadas} parcela(s) de crédito próprio em atraso ({fmtBRL(carteira.valorAtrasado)}) — confira em Crédito próprio › Parcelas e boletos.
+            {carteira.nAtrasadas} parcela(s) de crédito próprio em atraso ({fmtBRL(carteira.valorAtrasado)}) — confira na Agenda de recebimentos.
           </span>
         </div>
       )}
@@ -4619,6 +4892,31 @@ function Dashboard({ db, user }) {
           </div>
         ))}
       </div>
+
+      {isDir && carteira.itens > 0 && (
+        <div className="panel" data-testid="quadro-credito-proprio">
+          <h3 className="panel-title">Crédito próprio</h3>
+          <p className="panel-note">
+            Carteira de crédito da própria Adventus: {carteira.operacoes} operação(ões) lançada(s) em Operações
+            {carteira.contratos > 0 ? ` + ${carteira.contratos} contrato(s) do cadastro antigo` : ""}. Os pagamentos dos clientes estão na Agenda de recebimentos.
+          </p>
+          <div className="cards-grid">
+            {[
+              { label: "Emprestado", value: fmtBRL(carteira.emprestado) },
+              { label: "Total a receber (com ganho)", value: fmtBRL(carteira.totalReceber) },
+              { label: "Já recebido", value: fmtBRL(carteira.recebido) },
+              { label: "Saldo a receber", value: fmtBRL(carteira.saldoAberto) },
+              { label: "Em atraso", value: fmtBRL(carteira.valorAtrasado) },
+              { label: "Ganho contratado", value: fmtBRL(carteira.ganhoContratado) },
+            ].map((c) => (
+              <div key={c.label} className="stat-card">
+                <span className="stat-label">{c.label}</span>
+                <span className="stat-value">{c.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isDir && <ShareReceitaPanel canais={share.canais} total={share.total} periodoLabel={periodoLabel} />}
 
@@ -5687,10 +5985,11 @@ function teamsOf(db, scopeIds) {
 
 function RentabilidadePanel({ db, user }) {
   const [period, setPeriod] = useState("mes");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const team = teamColaboradorIds(db, user);
   const consultores = (team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id))).filter((c) => c.papel === "colaborador" || c.papel === "lider");
 
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
 
@@ -5718,12 +6017,7 @@ function RentabilidadePanel({ db, user }) {
           <h2 style={{ fontSize: 16 }}>Custo e rentabilidade por consultor</h2>
           <p className="muted">Honorário líquido gerado menos comissão + bônus efetivamente apurados no período.</p>
         </div>
-        <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-          <option value="mes">Este mês</option>
-          <option value="trimestre">Este trimestre</option>
-          <option value="ano">Este ano</option>
-          <option value="tudo">Todo o período</option>
-        </Select>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
       </div>
 
       <div className="cards-grid">
@@ -5891,10 +6185,11 @@ function ConsultorHistoricoPanel({ db, user }) {
 
 function TimesPanel({ db, user }) {
   const [period, setPeriod] = useState("mes");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
   const team = teamColaboradorIds(db, user);
   const groups = teamsOf(db, team);
 
-  const bounds = periodRange(period);
+  const bounds = periodRange(period, periodoCustom);
   const honorariosAll = visibleHonorarios(db, user);
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
 
@@ -5909,7 +6204,8 @@ function TimesPanel({ db, user }) {
       const comissaoLider = g.lider
         ? honorarios.filter((h) => h.liderId === g.lider.id).reduce((s, h) => s + computeHonorario(h).comissaoLider, 0)
         : 0;
-      const metaTime = metaMensal * (period === "mes" ? membros.length : membros.length * (period === "trimestre" ? 3 : period === "ano" ? 12 : 1));
+      const mesesPeriodo = period === "mes" ? 1 : period === "trimestre" ? 3 : period === "ano" ? 12 : period === "custom" && bounds ? Math.max(1, Math.round((new Date(bounds.end) - new Date(bounds.start)) / 86400000 / 30.4375)) : 1;
+      const metaTime = metaMensal * membros.length * mesesPeriodo;
       const pctMeta = metaTime > 0 ? (bruto / metaTime) * 100 : 0;
       return { g, membros, bruto, liquido, comissaoConsultores, comissaoLider, custoTotal: comissaoConsultores + comissaoLider, pctMeta };
     })
@@ -5925,11 +6221,7 @@ function TimesPanel({ db, user }) {
           <h2 style={{ fontSize: 16 }}>Comissão e metas por time</h2>
           <p className="muted">Times agrupados por líder — meta do time é a meta mensal individual multiplicada pelo número de consultores no período.</p>
         </div>
-        <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-          <option value="mes">Este mês</option>
-          <option value="trimestre">Este trimestre</option>
-          <option value="ano">Este ano</option>
-        </Select>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} semTudo />
       </div>
 
       {teamRows.length === 0 ? (
@@ -7028,9 +7320,9 @@ function pontoMinutos(hhmm) {
 const PONTO_JORNADA_PADRAO = [0, 528, 528, 528, 528, 528, 0];
 const pontoBase = (p) => ({
   batidas: [], vinculos: {}, arquivos: [], nomes: {},
-  feriados: [], eventos: [], ajustes: [], desconsideradas: {},
+  feriados: [], eventos: [], ajustes: [], desconsideradas: {}, excluidos: {},
   ...(p || {}),
-  jornada: { padrao: PONTO_JORNADA_PADRAO.slice(), porColab: {}, ...((p && p.jornada) || {}) },
+  jornada: { padrao: PONTO_JORNADA_PADRAO.slice(), porColab: {}, tolerancia: 0, ...((p && p.jornada) || {}) },
 });
 const pontoMut = (mutate, fn) => mutate((d) => ({ ...d, ponto: fn(pontoBase(d.ponto)) }));
 const pontoPad = (n) => String(n).padStart(2, "0");
@@ -7051,7 +7343,7 @@ function pontoCtx(db, colaboradorId) {
   p.ajustes.forEach((a) => { if (a.colaboradorId === colaboradorId) (manuais[a.data] = manuais[a.data] || []).push(a); });
   p.eventos.forEach((e) => { if (e.colaboradorId === colaboradorId) (eventos[e.data] = eventos[e.data] || []).push(e); });
   p.feriados.forEach((f) => { feriados[f.data] = f; });
-  return { relogio, manuais, eventos, feriados, desc: p.desconsideradas, jornada: p.jornada.porColab[colaboradorId] || p.jornada.padrao, temVinculo: ids.size > 0 };
+  return { relogio, manuais, eventos, feriados, desc: p.desconsideradas, jornada: p.jornada.porColab[colaboradorId] || p.jornada.padrao, tolerancia: Number(p.jornada.tolerancia) || 0, temVinculo: ids.size > 0 };
 }
 
 // tudo o que o sistema calcula para um dia de um colaborador
@@ -7073,6 +7365,10 @@ function pontoDiaInfo(ctx, data, hoje) {
   const abonoMin = eventos.filter((e) => e.tipo === "abono").reduce((s, e) => s + (e.minutos > 0 ? e.minutos : base), 0);
   const esperado = feriado ? 0 : Math.max(0, base - abonoMin);
   const trabalhado = total + extraMin;
+  // tolerância (opcional, padrão 0): variação diária pequena num dia completo não vira falta nem hora extra
+  const saldoBruto = trabalhado - esperado;
+  const tol = ctx.tolerancia || 0;
+  const ajusteTol = tol > 0 && data < hoje && horas.length > 0 && !incompleto && esperado > 0 && saldoBruto !== 0 && Math.abs(saldoBruto) <= tol ? -saldoBruto : 0;
   let status = "ok";
   if (!horas.length && !extraMin) {
     if (feriado) status = "feriado";
@@ -7083,7 +7379,7 @@ function pontoDiaInfo(ctx, data, hoje) {
   } else if (incompleto) status = "incompleto";
   return {
     data, dia: Number(data.slice(8, 10)), dow, registros, horas, total, incompleto, eventos, feriado,
-    base, esperado, extraMin, abonoMin, trabalhado, saldo: trabalhado - esperado, conta: data < hoje, status,
+    base, esperado, extraMin, abonoMin, trabalhado, ajusteTol, saldo: saldoBruto + ajusteTol, conta: data < hoje, status,
   };
 }
 
@@ -7130,21 +7426,22 @@ function pontoBanco(db, colaboradorId, de, ate) {
   for (let d = de; d <= fim && n < 1100; d = pontoAdd(d, 1), n++) {
     const info = pontoDiaInfo(ctx, d, hoje);
     const seg = pontoAdd(d, -((info.dow + 6) % 7));
-    const s = (semanas[seg] = semanas[seg] || { inicio: seg, fim: pontoAdd(seg, 6), esperado: 0, trabalhado: 0, incompletos: 0, semRegistro: 0 });
+    const s = (semanas[seg] = semanas[seg] || { inicio: seg, fim: pontoAdd(seg, 6), esperado: 0, trabalhado: 0, tolerancia: 0, incompletos: 0, semRegistro: 0 });
     s.esperado += info.esperado;
+    s.tolerancia += info.ajusteTol;
     s.trabalhado += info.trabalhado;
     if (info.status === "incompleto") s.incompletos++;
     if (info.status === "sem-registro") s.semRegistro++;
   }
   let acum = 0;
   const lista = Object.values(semanas).sort((a, b) => a.inicio.localeCompare(b.inicio)).map((s) => {
-    const saldo = s.trabalhado - s.esperado;
+    const saldo = s.trabalhado - s.esperado + s.tolerancia;
     acum += saldo;
     return { ...s, saldo, acumulado: acum };
   });
-  const tot = lista.reduce((t, s) => ({ esperado: t.esperado + s.esperado, trabalhado: t.trabalhado + s.trabalhado, incompletos: t.incompletos + s.incompletos, semRegistro: t.semRegistro + s.semRegistro }), { esperado: 0, trabalhado: 0, incompletos: 0, semRegistro: 0 });
+  const tot = lista.reduce((t, s) => ({ tolerancia: t.tolerancia + s.tolerancia, esperado: t.esperado + s.esperado, trabalhado: t.trabalhado + s.trabalhado, incompletos: t.incompletos + s.incompletos, semRegistro: t.semRegistro + s.semRegistro }), { tolerancia: 0, esperado: 0, trabalhado: 0, incompletos: 0, semRegistro: 0 });
   return {
-    semanas: lista, ...tot, saldo: tot.trabalhado - tot.esperado, ate: fim,
+    semanas: lista, ...tot, saldo: tot.trabalhado - tot.esperado + tot.tolerancia, ate: fim,
     metaSemanal: ctx.jornada.reduce((s, v) => s + v, 0), temVinculo: ctx.temVinculo,
   };
 }
@@ -7341,8 +7638,64 @@ function PontoImportar({ db, mutate }) {
   );
 }
 
+// Quem participa do ponto: incluir/retirar colaboradores (sem apagar o cadastro nem as batidas)
+function PontoParticipantes({ db, mutate }) {
+  const p = pontoBase(db.ponto);
+  const [nome, setNome] = useState("");
+  const alternar = (id, incluir) =>
+    pontoMut(mutate, (b) => {
+      const ex = { ...b.excluidos };
+      if (incluir) delete ex[id];
+      else ex[id] = true;
+      return { ...b, excluidos: ex };
+    });
+  const adicionar = () => {
+    const n = nome.trim();
+    if (!n) return;
+    mutate((d) => ({ ...d, collaborators: [...d.collaborators, { id: uid(), nome: n, papel: "colaborador", liderId: "" }] }));
+    setNome("");
+  };
+  const lista = db.collaborators.slice().sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  const nIncl = lista.filter((c) => !p.excluidos[c.id]).length;
+  return (
+    <div className="panel" data-testid="ponto-participantes">
+      <h3 className="panel-title">Quem participa do ponto</h3>
+      <p className="panel-note">
+        Marque os colaboradores que batem ponto. Quem for retirado some do Espelho, do Banco de horas e dos relatórios, mas o cadastro e as batidas continuam guardados — é só marcar de novo para voltar.
+        Se a pessoa ainda não está cadastrada, inclua abaixo (ela também passa a existir em Cadastros › Colaboradores).
+      </p>
+      <div className="inline-form">
+        <TextInput placeholder="Nome do novo colaborador" data-f="part-nome" value={nome} onChange={(e) => setNome(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); adicionar(); } }} />
+        <Btn type="button" data-f="part-add" onClick={adicionar}><Plus size={14} /> Incluir colaborador</Btn>
+      </div>
+      {lista.length === 0 ? (
+        <EmptyState text="Nenhum colaborador cadastrado." />
+      ) : (
+        <ul className="simple-list">
+          {lista.map((c) => {
+            const incluido = !p.excluidos[c.id];
+            const temBatidas = Object.values(p.vinculos).includes(c.id);
+            return (
+              <li key={c.id}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                  <input type="checkbox" data-part={c.id} checked={incluido} onChange={(e) => alternar(c.id, e.target.checked)} />
+                  <span>{c.nome}</span>
+                  {!incluido && <Tag>Fora do ponto</Tag>}
+                  {incluido && temBatidas && <Tag tone="positive">Relógio vinculado</Tag>}
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="panel-note" style={{ marginBottom: 0 }}>{nIncl} de {lista.length} no ponto.</p>
+    </div>
+  );
+}
+
 function PontoVinculos({ db, mutate }) {
   const p = { batidas: [], vinculos: {}, arquivos: [], nomes: {}, ...(db.ponto || {}) };
+  const excluidos = (db.ponto && db.ponto.excluidos) || {};
   const contagem = {};
   p.batidas.forEach((b) => { contagem[b.ident] = (contagem[b.ident] || 0) + 1; });
   const idents = Object.keys(contagem).sort();
@@ -7355,6 +7708,8 @@ function PontoVinculos({ db, mutate }) {
       return { ...d, ponto: { ...atual, vinculos: v } };
     });
   return (
+    <div>
+    <PontoParticipantes db={db} mutate={mutate} />
     <div className="panel">
       <h3 className="panel-title">Vínculo entre o relógio e os colaboradores</h3>
       <p className="panel-note">
@@ -7377,8 +7732,8 @@ function PontoVinculos({ db, mutate }) {
                 <td>
                   <Select value={p.vinculos[i] || ""} onChange={(e) => setVinculo(i, e.target.value)}>
                     <option value="">Não vinculado</option>
-                    {db.collaborators.map((c) => (
-                      <option key={c.id} value={c.id}>{c.nome}</option>
+                    {db.collaborators.filter((c) => !excluidos[c.id] || c.id === p.vinculos[i]).map((c) => (
+                      <option key={c.id} value={c.id}>{c.nome}{excluidos[c.id] ? " (fora do ponto)" : ""}</option>
                     ))}
                   </Select>
                 </td>
@@ -7387,6 +7742,7 @@ function PontoVinculos({ db, mutate }) {
           </tbody>
         </table>
       )}
+    </div>
     </div>
   );
 }
@@ -7883,6 +8239,20 @@ function PontoJornada({ db, mutate, colaboradores }) {
       return { ...b, feriados: [...b.feriados, ...nacionais.map(([md, nome]) => ({ id: uid(), data: `${ano}-${md}`, nome })).filter((f) => !existentes.has(f.data))] };
     });
   };
+  const pascoa = (y) => {
+    const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(y, mes - 1, dia);
+  };
+  const addSextaSanta = () => {
+    if (!/^\d{4}$/.test(ano)) return;
+    const pa = pascoa(Number(ano));
+    const data = pontoIso(new Date(pa.getFullYear(), pa.getMonth(), pa.getDate() - 2));
+    pontoMut(mutate, (b) => (b.feriados.some((f) => f.data === data) ? b : { ...b, feriados: [...b.feriados, { id: uid(), data, nome: "Sexta-feira Santa" }] }));
+  };
+  const setTolerancia = (v) => pontoMut(mutate, (b) => ({ ...b, jornada: { ...b.jornada, tolerancia: Math.max(0, Math.min(60, Math.floor(Number(v) || 0))) } }));
   const linha = (colabId, nome, jornada, personalizada) => (
     <tr key={colabId || "padrao"}>
       <td>{nome}</td>
@@ -7923,6 +8293,17 @@ function PontoJornada({ db, mutate, colaboradores }) {
         </div>
       </div>
       <div className="panel">
+        <h3 className="panel-title">Tolerância diária</h3>
+        <p className="panel-note">
+          Diferença máxima, em minutos, que ainda é considerada jornada cumprida num dia completo (a CLT admite até 10 minutos por dia). Dentro da tolerância o dia fecha com saldo zero; acima dela, conta tudo.
+          Com 0 (padrão) todo minuto conta. Não se aplica a dias com batida incompleta.
+        </p>
+        <div className="inline-form">
+          <TextInput type="number" min="0" max="60" style={{ maxWidth: 110 }} data-f="tolerancia" value={p.jornada.tolerancia || 0} onChange={(e) => setTolerancia(e.target.value)} />
+          <span className="muted">minutos por dia</span>
+        </div>
+      </div>
+      <div className="panel">
         <h3 className="panel-title">Feriados e dias sem expediente</h3>
         <p className="panel-note">Nesses dias a jornada esperada é zero para todos. Cadastre também os feriados estaduais e municipais — o botão abaixo adiciona só os nacionais de data fixa.</p>
         <div className="inline-form">
@@ -7931,6 +8312,7 @@ function PontoJornada({ db, mutate, colaboradores }) {
           <Btn type="button" data-f="fer-add" onClick={addFeriado}><Plus size={14} /> Adicionar</Btn>
           <TextInput type="number" style={{ maxWidth: 90 }} value={ano} onChange={(e) => setAno(e.target.value)} />
           <Btn type="button" variant="ghost" data-f="fer-nacionais" onClick={addNacionais}>Adicionar feriados nacionais do ano</Btn>
+          <Btn type="button" variant="ghost" data-f="fer-sexta" onClick={addSextaSanta}>Adicionar Sexta-feira Santa do ano</Btn>
         </div>
         {!feriadosOrdenados.length ? (
           <EmptyState text="Nenhum feriado cadastrado." />
@@ -7958,7 +8340,8 @@ function PontoPage({ db, mutate, user }) {
   const isDiretora = user.papel === "diretora";
   const [sub, setSub] = useState("espelho");
   const team = teamColaboradorIds(db, user);
-  const colaboradores = team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id));
+  const excluidos = pontoBase(db.ponto).excluidos;
+  const colaboradores = (team === null ? db.collaborators : db.collaborators.filter((c) => team.has(c.id))).filter((c) => !excluidos[c.id]);
   const tabs = [
     { id: "espelho", label: "Espelho de ponto" },
     { id: "banco", label: "Banco de horas" },
@@ -7996,7 +8379,6 @@ function navFor(user) {
     { id: "agenda", label: "Agenda de recebimentos", icon: CalendarClock },
   ];
   if (user.papel !== "colaborador") financeiro.push({ id: "relatorios", label: "Relatórios de desempenho", icon: BarChart3 });
-  if (user.papel === "diretora") financeiro.push({ id: "credito", label: "Crédito próprio", icon: HandCoins });
   if (user.papel === "diretora") financeiro.push({ id: "financeiro", label: "Financeiro interno", icon: Wallet });
 
   const time = [
