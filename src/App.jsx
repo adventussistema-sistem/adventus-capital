@@ -707,6 +707,19 @@ function EmptyState({ text }) {
 function Tag({ children, tone }) {
   return <span className={`tag ${tone ? `tag-${tone}` : ""}`}>{children}</span>;
 }
+// cor estável por produto (mesmo produto = mesma cor em todo o sistema)
+const PRODUTO_TONES = ["blue", "plum", "teal", "sand", "rose"];
+function produtoTone(nome) {
+  const n = String(nome || "").toLowerCase();
+  if (n.includes("crédito próprio") || n.includes("credito proprio")) return "brass";
+  if (!n || n === "sem produto") return null;
+  let h = 0;
+  for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) % 997;
+  return PRODUTO_TONES[h % PRODUTO_TONES.length];
+}
+function ProdutoTag({ nome }) {
+  return <Tag tone={produtoTone(nome)}>{nome}</Tag>;
+}
 function RowActions({ onEdit, onDelete }) {
   return (
     <span className="actions">
@@ -1561,7 +1574,25 @@ function CadastrosPage({ db, mutate, user }) {
     ...(isDiretora ? [{ id: "usuarios", label: "Usuários", icon: ShieldCheck }] : []),
   ];
 
-  const delFrom = (key) => (id) => mutate((d) => ({ ...d, [key]: d[key].filter((x) => x.id !== id) }));
+  // quantos registros dependem deste item (evita apagar cadastro em uso e deixar "—" pelo sistema)
+  const emUso = (key, id) => {
+    const c = (arr, f) => (arr || []).filter(f).length;
+    if (key === "clients") return c(db.operations, (o) => o.clienteId === id) + c(db.honorarios, (h) => h.clienteId === id) + c(db.creditos, (x) => x.clienteId === id);
+    if (key === "institutions") return c(db.operations, (o) => o.instituicaoId === id);
+    if (key === "partners") return c(db.honorarios, (h) => h.parceiroId === id);
+    if (key === "collaborators")
+      return c(db.honorarios, (h) => h.colaboradorId === id || h.liderId === id) + c(db.collaborators, (x) => x.liderId === id) + c(db.users, (u) => u.colaboradorId === id);
+    return 0;
+  };
+  const NOMES_CAD = { clients: "cliente", institutions: "instituição", partners: "parceiro", collaborators: "colaborador" };
+  const delFrom = (key) => (id) => {
+    const n = emUso(key, id);
+    if (n > 0) {
+      try { window.alert(`Não dá para excluir este ${NOMES_CAD[key]}: ele está vinculado a ${n} registro(s) (operações, honorários ou usuários). Remova ou troque os vínculos antes.`); } catch (e) { /* sem alert */ }
+      return;
+    }
+    mutate((d) => ({ ...d, [key]: d[key].filter((x) => x.id !== id) }));
+  };
   const editIn = (key) => (id, patch) => mutate((d) => ({ ...d, [key]: d[key].map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
   const team = teamColaboradorIds(db, user);
@@ -1651,6 +1682,41 @@ function CadastrosPage({ db, mutate, user }) {
 
 /* ---------------------------- Operações ---------------------------- */
 
+// Primeira pergunta ao lançar uma operação: de que tipo ela é? O resto do formulário se adapta.
+function TipoOperacaoCards({ onPick, onCancel }) {
+  return (
+    <div className="panel" data-testid="tipo-operacao">
+      <h3 className="panel-title">Qual o tipo da operação?</h3>
+      <p className="panel-note">Escolha para mostrarmos só os campos que fazem sentido. Dá para trocar depois, sem perder o que já foi preenchido.</p>
+      <div className="tipo-op">
+        <button type="button" className="tipo-card" data-tipo="intermediacao" onClick={() => onPick("intermediacao")}>
+          <span className="tipo-card-icon"><Landmark size={19} /></span>
+          <strong>Intermediação com instituição financeira</strong>
+          <p>A Adventus conecta o cliente a um banco, fintech ou fundo e recebe o repasse da instituição e/ou o honorário do cliente.</p>
+          <ul>
+            <li>Honorário do cliente, parceiro e imposto</li>
+            <li>Repasse da instituição e TAC (opcional)</li>
+            <li>Comissão do consultor e do líder</li>
+          </ul>
+        </button>
+        <button type="button" className="tipo-card" data-tipo="proprio" onClick={() => onPick("proprio")}>
+          <span className="tipo-card-icon"><HandCoins size={19} /></span>
+          <strong>Crédito próprio da Adventus</strong>
+          <p>O dinheiro emprestado é da própria Adventus e o cliente devolve com ganho, à vista ou em parcelas.</p>
+          <ul>
+            <li>Sem honorário, parceiro nem imposto</li>
+            <li>Parcelas na Agenda de recebimentos</li>
+            <li>Ganho na DRE e fluxo de caixa</li>
+          </ul>
+        </button>
+      </div>
+      <div className="form-actions" style={{ marginTop: 14 }}>
+        <Btn type="button" variant="ghost" onClick={onCancel}>Cancelar</Btn>
+      </div>
+    </div>
+  );
+}
+
 function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, user }) {
   const ownRecord = db.collaborators.find((c) => c.id === user.colaboradorId);
   const isSelfScoped = user.papel === "lider" || user.papel === "colaborador";
@@ -1690,7 +1756,24 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     nParcelas: editingOp?.recebiveis?.length > 1 ? editingOp.recebiveis.length : 2,
     primeiraData: editingOp?.recebiveis?.[0]?.vencimento || "",
     recebiveis: editingOp?.recebiveis || [],
+    // Recebimento do honorário do cliente (à vista ou parcelado)
+    honForma: editingHon?.formaPagamentoHon || "avista",
+    honNParcelas: editingHon?.recebiveisHon?.length > 1 ? editingHon.recebiveisHon.length : 2,
+    honPrimeira: editingHon?.recebiveisHon?.[0]?.vencimento || "",
+    honRecebiveis: editingHon?.recebiveisHon || [],
   }));
+  const [tipoDefinido, setTipoDefinido] = useState(!!editingOp);
+  const escolherTipo = (tipo) => {
+    const proprio = tipo === "proprio";
+    const adventus = db.institutions.find(ehInstituicaoAdventus);
+    setForm((prev) => ({
+      ...prev,
+      creditoProprio: proprio,
+      modalidade: proprio ? (prev.modalidade && normTxt(prev.modalidade) !== "" ? prev.modalidade : "Crédito Próprio") : normTxt(prev.modalidade) === "credito proprio" ? "" : prev.modalidade,
+      instituicaoId: proprio && !prev.instituicaoId && adventus ? adventus.id : prev.instituicaoId,
+    }));
+    setTipoDefinido(true);
+  };
   const [impostoTocado, setImpostoTocado] = useState(!!editingHon);
 
   // gera as parcelas a partir do total, da forma de pagamento e da 1ª data (mantém as já pagas)
@@ -1699,20 +1782,19 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     const primeira = f.formaPagamento === "avista" ? f.primeiraData || f.dataCredito : f.primeiraData;
     return { ...f, recebiveis: gerarRecebiveis({ total: f.valorTotalCliente, n, primeiraData: primeira, anteriores: f.recebiveis }) };
   };
+  // honorário parcelado: parcelas mensais do honorário bruto (mantém as já pagas)
+  const regerarHon = (f) =>
+    f.honForma === "parcelado"
+      ? { ...f, honRecebiveis: gerarRecebiveis({ total: f.valorHonorario, n: f.honNParcelas, primeiraData: f.honPrimeira || f.dataCredito, anteriores: f.honRecebiveis }) }
+      : { ...f, honRecebiveis: [] };
+  const updateHon = (patch) => setForm((prev) => regerarHon({ ...prev, ...patch }));
+  const setParcelaHon = (n, patch) =>
+    setForm((prev) => ({ ...prev, honRecebiveis: prev.honRecebiveis.map((p) => (p.n === n ? { ...p, ...patch } : p)) }));
+  const somaHon = round2((form.honRecebiveis || []).reduce((s, p) => s + (Number(p.valor) || 0), 0));
   const updatePagto = (patch) => setForm((prev) => regerarRecebiveis({ ...prev, ...patch }));
   const setParcela = (n, patch) =>
     setForm((prev) => ({ ...prev, recebiveis: prev.recebiveis.map((p) => (p.n === n ? { ...p, ...patch } : p)) }));
-  const onInstituicaoChange = (id) => {
-    const inst = db.institutions.find((b) => b.id === id);
-    setForm((prev) => {
-      const next = { ...prev, instituicaoId: id };
-      if (!editingOp && ehInstituicaoAdventus(inst) && !prev.creditoProprio) {
-        next.creditoProprio = true;
-        if (!prev.modalidade) next.modalidade = "Crédito Próprio";
-      }
-      return next;
-    });
-  };
+  const onInstituicaoChange = (id) => setForm((prev) => ({ ...prev, instituicaoId: id }));
   const somaRecebiveis = round2((form.recebiveis || []).reduce((s, p) => s + (Number(p.valor) || 0), 0));
   const principalForm = Number(form.valorLiberado) || Number(form.valorAprovado) || 0;
   const ganhoCreditoProprio = round2((Number(form.valorTotalCliente) || 0) - principalForm);
@@ -1736,7 +1818,11 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     if (impostoTocado && !aindaPadrao) return merged;
     return { ...merged, imposto: (Number(merged.valorHonorario) * (impostoPadrao / 100)).toFixed(2) };
   };
-  const updateForm = (patch) => setForm((prev) => recalcImposto(recalcParceiro({ ...prev, ...patch }), prev));
+  const updateForm = (patch) =>
+    setForm((prev) => {
+      const next = recalcImposto(recalcParceiro({ ...prev, ...patch }), prev);
+      return "valorHonorario" in patch ? regerarHon(next) : next;
+    });
 
   const onValorAprovadoChange = (v) => updateForm({ valorAprovado: v, valorLiberado: form.valorLiberado === "" ? v : form.valorLiberado });
 
@@ -1767,6 +1853,8 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
   if (superMeta > 0 && brutoAcumulado >= superMeta) bonusProjetado = db.metas?.bonusSuperMeta || 0;
   else if (metaMensal > 0 && brutoAcumulado >= metaMensal) bonusProjetado = db.metas?.bonusMeta || 0;
 
+  if (!tipoDefinido) return <TipoOperacaoCards onPick={escolherTipo} onCancel={onCancel} />;
+
   return (
     <form
       className="panel form-grid"
@@ -1776,6 +1864,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         if (!form.numero || !form.instituicaoId || !form.clienteId) return;
         if (!cp && !form.colaboradorId) return;
         if (cp && Number(form.valorTotalCliente) > 0 && form.recebiveis.length === 0) return;
+        if (!cp && form.honForma === "parcelado" && Number(form.valorHonorario) > 0 && form.honRecebiveis.length === 0) return;
         onSave({
           operacao: {
             numero: form.numero,
@@ -1805,10 +1894,19 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
             imposto: cp ? 0 : Number(form.imposto) || 0,
             colaboradorId: form.colaboradorId,
             liderId: cp ? "" : form.liderId,
+            formaPagamentoHon: cp ? "avista" : form.honForma,
+            recebiveisHon: !cp && form.honForma === "parcelado" ? form.honRecebiveis : [],
           },
         });
       }}
     >
+      <div className="tipo-chip" style={{ gridColumn: "1 / -1" }} data-testid="tipo-escolhido">
+        <span className="tipo-card-icon" style={{ width: 30, height: 30, borderRadius: 9 }}>{form.creditoProprio ? <HandCoins size={16} /> : <Landmark size={16} />}</span>
+        <span>
+          Tipo: <strong>{form.creditoProprio ? "Crédito próprio da Adventus" : "Intermediação com instituição financeira"}</strong>
+        </span>
+        <button type="button" className="link-btn" data-f="alterar-tipo" style={{ marginLeft: "auto" }} onClick={() => setTipoDefinido(false)}>Alterar tipo</button>
+      </div>
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>Dados da operação</h3>
       <Field label="Número da operação">
         <TextInput value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} required />
@@ -1831,16 +1929,6 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       </Field>
       <Field label="Valor aprovado (cliente)">
         <MoneyInput value={form.valorAprovado} onChange={(e) => onValorAprovadoChange(e.target.value)} />
-      </Field>
-      <Field label="Tipo da operação" hint="Operação feita pela própria Adventus, sem outra instituição financeira">
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-          <input
-            type="checkbox"
-            checked={!!form.creditoProprio}
-            onChange={(e) => setForm({ ...form, creditoProprio: e.target.checked, modalidade: e.target.checked && !form.modalidade ? "Crédito Próprio" : form.modalidade })}
-          />
-          <span style={{ fontSize: 13, color: "var(--text)" }}>Crédito próprio (sem honorário do cliente)</span>
-        </label>
       </Field>
       {!form.creditoProprio && (
         <>
@@ -1884,7 +1972,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       </Field>
       )}
       <Field label="Data do crédito">
-        <TextInput type="date" value={form.dataCredito} onChange={(e) => setForm({ ...form, dataCredito: e.target.value })} />
+        <TextInput type="date" value={form.dataCredito} onChange={(e) => (form.honForma === "parcelado" && !form.honPrimeira ? updateHon({ dataCredito: e.target.value }) : setForm({ ...form, dataCredito: e.target.value }))} />
       </Field>
       <Field label="Valor liberado da operação">
         <MoneyInput value={form.valorLiberado} onChange={(e) => updateForm({ valorLiberado: e.target.value })} />
@@ -1928,6 +2016,60 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           ))}
         </Select>
       </Field>
+      )}
+
+      {!form.creditoProprio && (
+        <>
+          <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginTop: 16, marginBottom: 0 }}>Recebimento do honorário do cliente</h3>
+          <p className="panel-note" style={{ gridColumn: "1 / -1", margin: 0 }}>
+            Como o cliente paga o honorário? Cada parcela aparece sozinha na Agenda de recebimentos e entra no caixa quando for recebida.
+          </p>
+          <Field label="Forma de recebimento">
+            <Select value={form.honForma} onChange={(e) => updateHon({ honForma: e.target.value })} data-f="hon-forma">
+              <option value="avista">À vista (1 recebimento)</option>
+              <option value="parcelado">Parcelado</option>
+            </Select>
+          </Field>
+          {form.honForma === "parcelado" && (
+            <>
+              <Field label="Número de parcelas">
+                <TextInput type="number" min="2" max="60" data-f="hon-nparcelas" value={form.honNParcelas} onChange={(e) => updateHon({ honNParcelas: Math.max(2, Math.min(60, Math.floor(Number(e.target.value) || 2))) })} />
+              </Field>
+              <Field label="Data da 1ª parcela" hint="Se vazio, usa a data do crédito">
+                <TextInput type="date" data-f="hon-primeira" value={form.honPrimeira || form.dataCredito || ""} onChange={(e) => updateHon({ honPrimeira: e.target.value })} />
+              </Field>
+            </>
+          )}
+          {form.honForma === "parcelado" && form.honRecebiveis.length > 0 && (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <table className="table" data-testid="recebiveis-honorario">
+                <thead>
+                  <tr><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Já pago?</th></tr>
+                </thead>
+                <tbody>
+                  {form.honRecebiveis.map((p) => (
+                    <tr key={p.n}>
+                      <td>{p.n}/{form.honRecebiveis.length}</td>
+                      <td><TextInput type="date" value={p.vencimento} onChange={(e) => setParcelaHon(p.n, { vencimento: e.target.value })} /></td>
+                      <td><MoneyInput value={p.valor} onChange={(e) => setParcelaHon(p.n, { valor: Number(e.target.value) || 0 })} /></td>
+                      <td>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input type="checkbox" checked={!!p.pago} onChange={(e) => setParcelaHon(p.n, { pago: e.target.checked, dataPagamento: e.target.checked ? p.dataPagamento || p.vencimento : null })} />
+                          <span style={{ fontSize: 12.5 }}>Sim</span>
+                        </label>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {Math.abs(somaHon - (Number(form.valorHonorario) || 0)) > 0.009 && (
+                <p className="panel-note" style={{ margin: "6px 0 0", color: "var(--negative, #9a3b3b)" }}>
+                  Atenção: as parcelas somam {fmtBRL(somaHon)}, diferente do honorário informado ({fmtBRL(Number(form.valorHonorario) || 0)}).
+                </p>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {form.creditoProprio && (
@@ -2121,6 +2263,7 @@ function OperacoesPage({ db, mutate, user }) {
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
   const [produtoFiltro, setProdutoFiltro] = useState("todos");
+  const [aviso, setAviso] = useState("");
   const institutionName = (id) => db.institutions.find((b) => b.id === id)?.nome || "—";
   const clientName = (id) => db.clients.find((c) => c.id === id)?.nome || "—";
   const collabName = (id) => db.collaborators.find((c) => c.id === id)?.nome || "—";
@@ -2148,6 +2291,8 @@ function OperacoesPage({ db, mutate, user }) {
     });
     setShowForm(false);
     setEditingId(null);
+    setAviso(`Operação ${data.operacao.numero} ${editingId ? "atualizada" : "salva"} com sucesso.`);
+    window.setTimeout(() => setAviso(""), 3500);
   };
 
   const editingOp = editingId ? db.operations.find((o) => o.id === editingId) : null;
@@ -2190,8 +2335,9 @@ function OperacoesPage({ db, mutate, user }) {
           </Select>
         </div>
       )}
+      {aviso && <div className="toast" role="status" data-testid="toast"><Check size={15} /> {aviso}</div>}
       {visibleOps.length === 0 ? (
-        <EmptyState text="Nenhuma operação lançada ainda." />
+        <EmptyState text="Nenhuma operação lançada ainda. Clique em “Nova operação” para começar." />
       ) : filteredOperations.length === 0 ? (
         <EmptyState text="Nenhuma operação encontrada para essa busca." />
       ) : (
@@ -2220,7 +2366,7 @@ function OperacoesPage({ db, mutate, user }) {
                 return (
                   <tr key={o.id}>
                     <td>{o.numero}</td>
-                    <td><Tag tone={o.creditoProprio ? "brass" : null}>{opProduto(db, o)}</Tag></td>
+                    <td><ProdutoTag nome={opProduto(db, o)} /></td>
                     <td>{institutionName(o.instituicaoId)}</td>
                     <td>{clientName(o.clienteId)}</td>
                     <td>{hon?.dataCredito ? new Date(hon.dataCredito + "T00:00:00").toLocaleDateString("pt-BR") : "—"}</td>
@@ -2237,6 +2383,11 @@ function OperacoesPage({ db, mutate, user }) {
                       ) : (
                         <Tag tone={o.recebidoBanco ? "positive" : null}>{o.recebidoBanco ? "Recebido" : "A receber"}</Tag>
                       )}
+                      {hon?.formaPagamentoHon === "parcelado" && (hon.recebiveisHon || []).length > 0 && (() => {
+                        const ps = hon.recebiveisHon;
+                        const pagas = ps.filter((p) => p.pago).length;
+                        return <Tag tone={pagas === ps.length ? "positive" : pagas > 0 ? "brass" : null}>{`Honorário ${pagas}/${ps.length} pagas`}</Tag>;
+                      })()}
                     </td>
                     <td className="num strong">{c && !o.creditoProprio ? fmtBRL(c.liquido) : "—"}</td>
                     <td>{hon ? collabName(hon.colaboradorId) : "—"}</td>
@@ -2246,11 +2397,16 @@ function OperacoesPage({ db, mutate, user }) {
                       <RowActions
                         onEdit={() => { setEditingId(o.id); setShowForm(true); }}
                         onDelete={() =>
-                          mutate((d) => ({
-                            ...d,
-                            operations: d.operations.filter((x) => x.id !== o.id),
-                            honorarios: d.honorarios.filter((h) => h.operacaoId !== o.id),
-                          }))
+                          mutate((d) => {
+                            const honIds = new Set(d.honorarios.filter((h) => h.operacaoId === o.id).map((h) => h.id));
+                            return {
+                              ...d,
+                              operations: d.operations.filter((x) => x.id !== o.id),
+                              honorarios: d.honorarios.filter((h) => h.operacaoId !== o.id),
+                              // lançamentos pendentes da Agenda ligados a esta operação saem junto (os já recebidos ficam: o dinheiro entrou)
+                              recebimentos: (d.recebimentos || []).filter((r) => r.recebido || !(r.refId === o.id || honIds.has(r.refId))),
+                            };
+                          })
                         }
                       />
                     </td>
@@ -2357,6 +2513,15 @@ function fluxoCaixaMes(db, ym) {
   const entradasHonorarios = (db.recebimentos || [])
     .filter((r) => r.tipo === "cliente" && r.recebido && monthKey(r.dataRecebimento) === ym)
     .reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  // honorário parcelado: cada parcela paga entra no caixa na data do pagamento
+  const entradasHonorariosParcelas = (db.honorarios || []).reduce(
+    (t, h) =>
+      t +
+      (h.formaPagamentoHon === "parcelado" ? h.recebiveisHon || [] : [])
+        .filter((p) => p.pago && monthKey(p.dataPagamento || p.vencimento) === ym)
+        .reduce((s, p) => s + (Number(p.valor) || 0), 0),
+    0
+  );
   const entradasBancoAgenda = (db.recebimentos || [])
     .filter((r) => r.tipo === "banco" && r.recebido && monthKey(r.dataRecebimento) === ym)
     .reduce((s, r) => s + (Number(r.valor) || 0), 0);
@@ -2375,13 +2540,13 @@ function fluxoCaixaMes(db, ym) {
 
   // crédito próprio: entra o que foi pago nas parcelas; sai o principal liberado
   const cred = creditoCaixaMes(db, ym);
-  const entradas = entradasHonorarios + entradasBancoAgenda + entradasBancoDireto + cred.entradas;
+  const entradas = entradasHonorarios + entradasHonorariosParcelas + entradasBancoAgenda + entradasBancoDireto + cred.entradas;
   const saidas =
     (db.despesas || [])
       .filter((d) => d.pago && monthKey(d.dataPagamento) === ym)
       .reduce((s, d) => s + (Number(d.valor) || 0), 0) + cred.saidas;
 
-  return { ym, entradasHonorarios, entradasBanco: entradasBancoAgenda + entradasBancoDireto, entradasCredito: cred.entradas, saidasCredito: cred.saidas, entradas, saidas, saldo: entradas - saidas };
+  return { ym, entradasHonorarios: entradasHonorarios + entradasHonorariosParcelas, entradasBanco: entradasBancoAgenda + entradasBancoDireto, entradasCredito: cred.entradas, saidasCredito: cred.saidas, entradas, saidas, saldo: entradas - saidas };
 }
 
 // últimos N meses (yyyy-mm) até o mês corrente, mais antigo primeiro
@@ -2474,10 +2639,47 @@ function caixaRecebiveisMes(db, ym) {
 
 // o recebimento aparece para quem enxerga o honorário/operação a que ele pertence
 function recebimentoVisivel(db, r, visibleHonIds, user) {
-  if (r.tipo === "cliente") return visibleHonIds.has(r.refId);
+  if (r.tipo === "cliente" || r.tipo === "honparc") return visibleHonIds.has(r.refId);
   if (r.tipo === "credito" || r.tipo === "tac") return (db.honorarios || []).some((h) => h.operacaoId === r.refId && visibleHonIds.has(h.id));
   if (r.tipo === "contrato") return !user || user.papel === "diretora"; // contratos de crédito próprio são só da diretora
   return true;
+}
+
+// descrição curta "de quem é" cada recebimento (usada no Painel e na Agenda)
+function recebimentoRef(db, r) {
+  if (r.tipo === "cliente" || r.tipo === "honparc") {
+    const h = (db.honorarios || []).find((x) => x.id === r.refId);
+    return h ? `Honorário · ${(db.clients || []).find((c) => c.id === h.clienteId)?.nome || "—"}` : "Honorário";
+  }
+  if (r.tipo === "contrato") {
+    const c = (db.creditos || []).find((x) => x.id === r.refId);
+    return c ? `Contrato de crédito · ${c.nome || "—"}` : "Contrato de crédito";
+  }
+  const o = (db.operations || []).find((x) => x.id === r.refId);
+  const cli = o ? (db.clients || []).find((c) => c.id === o.clienteId)?.nome || "—" : "";
+  const rotulo = r.tipo === "tac" ? "TAC" : r.tipo === "credito" ? "Crédito próprio" : "Instituição";
+  return o ? `${rotulo} · ${o.numero} · ${cli}` : rotulo;
+}
+
+// produto (modalidade) e natureza (Intermediação x Crédito próprio) de um recebimento
+function recebimentoProduto(db, r) {
+  let op = null;
+  if (r.tipo === "cliente" || r.tipo === "honparc") {
+    const h = (db.honorarios || []).find((x) => x.id === r.refId);
+    op = h ? (db.operations || []).find((o) => o.id === h.operacaoId) : null;
+    if (h && String(h.modalidade || "").trim()) {
+      const proprio = !!op?.creditoProprio || normTxt(h.modalidade) === "credito proprio";
+      return { produto: String(h.modalidade).trim(), natureza: proprio ? "Crédito próprio" : "Intermediação" };
+    }
+  } else if (r.tipo === "contrato") {
+    return { produto: "Crédito Próprio", natureza: "Crédito próprio" };
+  } else {
+    op = (db.operations || []).find((o) => o.id === r.refId);
+  }
+  if (!op) return { produto: SEM_PRODUTO, natureza: "Intermediação" };
+  const produto = opProduto(db, op);
+  const proprio = !!op.creditoProprio || normTxt(produto) === "credito proprio";
+  return { produto, natureza: proprio ? "Crédito próprio" : "Intermediação" };
 }
 
 /* ---------------------------- Agenda de recebimentos ---------------------------- */
@@ -2505,6 +2707,18 @@ function agendaAutomatica(db) {
   });
   (db.honorarios || []).forEach((h) => {
     const valor = Number(h.valorHonorario) || 0;
+    const psHon = h.formaPagamentoHon === "parcelado" ? h.recebiveisHon || [] : [];
+    if (valor > 0 && psHon.length && !clienteManual.has(h.id)) {
+      psHon.forEach((p) => {
+        if (!p.vencimento || !(Number(p.valor) > 0)) return;
+        out.push({
+          id: `auto-honparc-${h.id}-${p.n}`, auto: true, tipo: "honparc", refId: h.id, n: p.n,
+          descricao: `Honorário do cliente · parcela ${p.n}/${psHon.length}`, valor: Number(p.valor), dataVencimento: p.vencimento,
+          recebido: !!p.pago, dataRecebimento: p.pago ? p.dataPagamento || p.vencimento : null,
+        });
+      });
+      return;
+    }
     if (!h.dataCredito || valor <= 0 || clienteManual.has(h.id)) return;
     out.push({
       id: `auto-cliente-${h.id}`, auto: true, tipo: "cliente", refId: h.id,
@@ -2625,6 +2839,8 @@ function AgendaPage({ db, mutate, user }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState("todos");
+  const [produtoFiltro, setProdutoFiltro] = useState("todos");
+  const [agrupar, setAgrupar] = useState(true);
 
   const visibleHon = visibleHonorarios(db, user);
   const visibleHonIds = new Set(visibleHon.map((h) => h.id));
@@ -2648,6 +2864,14 @@ function AgendaPage({ db, mutate, user }) {
       if (r.tipo === "tac") {
         return { ...d, operations: d.operations.map((o) => (o.id === r.refId ? { ...o, tacRecebido: true, tacDataRecebimento: data } : o)) };
       }
+      if (r.tipo === "honparc") {
+        return {
+          ...d,
+          honorarios: d.honorarios.map((h) =>
+            h.id === r.refId ? { ...h, recebiveisHon: (h.recebiveisHon || []).map((p) => (p.n === r.n ? { ...p, pago: true, dataPagamento: data } : p)) } : h
+          ),
+        };
+      }
       if (r.tipo === "contrato") {
         return {
           ...d,
@@ -2668,7 +2892,7 @@ function AgendaPage({ db, mutate, user }) {
     });
 
   const refLabel = (r) => {
-    if (r.tipo === "cliente") {
+    if (r.tipo === "cliente" || r.tipo === "honparc") {
       const h = db.honorarios.find((x) => x.id === r.refId);
       return h ? `Honorário · ${db.clients.find((c) => c.id === h.clienteId)?.nome || "—"}` : "Honorário removido";
     }
@@ -2684,9 +2908,19 @@ function AgendaPage({ db, mutate, user }) {
     return o ? `Instituição · ${o.numero} · ${cli}${inst ? ` (${inst})` : ""}` : "Operação removida";
   };
 
-  const withStatus = list.map((r) => ({ ...r, status: recebimentoStatus(r) })).sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
-  const counts = withStatus.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] || 0) + 1 }), {});
-  const filtered = filter === "todos" ? withStatus : withStatus.filter((r) => r.status === filter);
+  const withStatus = list
+    .map((r) => ({ ...r, status: recebimentoStatus(r), ...recebimentoProduto(db, r) }))
+    .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
+  const produtosAgenda = [...new Map(withStatus.map((r) => [normTxt(r.produto), r.produto])).values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const porProduto = produtoFiltro === "todos" ? withStatus : withStatus.filter((r) => normTxt(r.produto) === normTxt(produtoFiltro));
+  const counts = porProduto.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] || 0) + 1 }), {});
+  // "Todos" mostra só o que ainda está em aberto; o que já foi recebido fica na aba "Recebidos"
+  const filtered = filter === "todos" ? porProduto.filter((r) => !r.recebido) : porProduto.filter((r) => r.status === filter);
+  const totalFiltrado = filtered.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const grupos = agrupar
+    ? [...filtered.reduce((m, r) => { const k = normTxt(r.produto); if (!m.has(k)) m.set(k, { produto: r.produto, itens: [] }); m.get(k).itens.push(r); return m; }, new Map()).values()]
+        .sort((a, b) => a.produto.localeCompare(b.produto, "pt-BR"))
+    : [{ produto: null, itens: filtered }];
 
   const save = (data) => {
     mutate((d) => {
@@ -2699,12 +2933,12 @@ function AgendaPage({ db, mutate, user }) {
   const editing = editingId ? db.recebimentos.find((r) => r.id === editingId) : null;
 
   const filters = [
-    { id: "todos", label: "Todos" },
+    { id: "todos", label: `Em aberto (${porProduto.filter((r) => !r.recebido).length})` },
     { id: "atrasado", label: `Atrasados (${counts.atrasado || 0})` },
     { id: "hoje", label: `Hoje (${counts.hoje || 0})` },
     { id: "proximo", label: `Próximos 7 dias (${counts.proximo || 0})` },
     { id: "futuro", label: "Futuros" },
-    { id: "recebido", label: "Recebidos" },
+    { id: "recebido", label: `Recebidos (${counts.recebido || 0})` },
   ];
 
   return (
@@ -2712,7 +2946,7 @@ function AgendaPage({ db, mutate, user }) {
       <div className="page-header">
         <div>
           <h2>Agenda de recebimentos</h2>
-          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
+          <p className="muted" style={{ margin: "6px 0 0", fontSize: 13, maxWidth: 720, lineHeight: 1.5 }}>
             Os recebimentos futuros das Operações (repasse da instituição, honorário do cliente, TAC, pagamentos do cliente no crédito próprio e parcelas de contratos de crédito) aparecem aqui automaticamente, nas datas cadastradas na operação.
             Use "Novo recebimento" só para parcelas ou lançamentos extras.
           </p>
@@ -2743,13 +2977,33 @@ function AgendaPage({ db, mutate, user }) {
         ))}
       </div>
 
+      <div className="toolbar-row" data-testid="agenda-toolbar">
+        <label className="toolbar-field">
+          <span>Produto</span>
+          <Select value={produtoFiltro} onChange={(e) => setProdutoFiltro(e.target.value)} data-testid="agenda-filtro-produto">
+            <option value="todos">Todos os produtos</option>
+            {produtosAgenda.map((p) => <option key={p} value={p}>{p}</option>)}
+          </Select>
+        </label>
+        <label className="checkbox-row toolbar-check">
+          <input type="checkbox" checked={agrupar} onChange={(e) => setAgrupar(e.target.checked)} data-testid="agenda-agrupar" />
+          <span>Separar por produto</span>
+        </label>
+        <span className="muted toolbar-total">
+          {filter === "recebido" ? "Total recebido" : "Total a receber"}: <strong>{fmtBRL(totalFiltrado)}</strong>
+          {filter === "todos" && counts.recebido ? <> · {counts.recebido} já recebido(s) ocultos — veja em "Recebidos"</> : null}
+        </span>
+      </div>
+
       {filtered.length === 0 ? (
-        <EmptyState text="Nenhum recebimento nesse filtro." />
+        <EmptyState text={filter === "todos" ? "Nada em aberto nesse filtro. Os já recebidos estão na aba \"Recebidos\"." : "Nenhum recebimento nesse filtro."} />
       ) : (
-        <table className="table">
+        <div className="table-scroll">
+        <table className="table agenda-table">
           <thead>
             <tr>
               <th>Vencimento</th>
+              <th>Produto</th>
               <th>Referência</th>
               <th>Descrição</th>
               <th>Valor</th>
@@ -2758,9 +3012,23 @@ function AgendaPage({ db, mutate, user }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => (
+            {grupos.map((g) => (
+              <React.Fragment key={g.produto || "todos"}>
+                {g.produto && (
+                  <tr className="group-row" data-testid="agenda-grupo">
+                    <td colSpan={7}>
+                      <ProdutoTag nome={g.produto} />
+                      <span className="muted"> {g.itens.length} recebimento(s) · {fmtBRL(g.itens.reduce((s, r) => s + (Number(r.valor) || 0), 0))}</span>
+                    </td>
+                  </tr>
+                )}
+            {g.itens.map((r) => (
               <tr key={r.id}>
                 <td>{new Date(r.dataVencimento + "T00:00:00").toLocaleDateString("pt-BR")}</td>
+                <td data-testid="col-produto">
+                  <ProdutoTag nome={r.produto} />
+                  <small className="natureza">{r.natureza}</small>
+                </td>
                 <td>{refLabel(r)}</td>
                 <td>
                   {r.descricao || "—"}
@@ -2772,7 +3040,8 @@ function AgendaPage({ db, mutate, user }) {
                     {STATUS_LABEL[r.status]}
                   </Tag>
                 </td>
-                <td className="actions">
+                <td>
+                  <div className="agenda-actions">
                   {!r.recebido && (
                     <DataConfirmBtn
                       label="Marcar recebido"
@@ -2791,11 +3060,15 @@ function AgendaPage({ db, mutate, user }) {
                       onDelete={() => mutate((d) => ({ ...d, recebimentos: d.recebimentos.filter((x) => x.id !== r.id) }))}
                     />
                   )}
+                  </div>
                 </td>
               </tr>
             ))}
+              </React.Fragment>
+            ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
@@ -2992,7 +3265,7 @@ function DespesasPage({ db, mutate }) {
     .map((d) => ({ ...d, status: despesaStatus(d) }))
     .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
   const counts = withStatus.reduce((acc, d) => ({ ...acc, [d.status]: (acc[d.status] || 0) + 1 }), {});
-  const filtered = filter === "todos" ? withStatus : withStatus.filter((d) => d.status === filter);
+  const filtered = filter === "todos" ? withStatus.filter((d) => d.status !== "pago") : withStatus.filter((d) => d.status === filter);
   const totalFiltrado = filtered.reduce((s, d) => s + (Number(d.valor) || 0), 0);
 
   const save = (data) => {
@@ -3006,12 +3279,12 @@ function DespesasPage({ db, mutate }) {
   const editing = editingId ? db.despesas.find((d) => d.id === editingId) : null;
 
   const filters = [
-    { id: "todos", label: "Todas" },
+    { id: "todos", label: `Em aberto (${withStatus.filter((d) => d.status !== "pago").length})` },
     { id: "atrasado", label: `Atrasadas (${counts.atrasado || 0})` },
     { id: "hoje", label: `Hoje (${counts.hoje || 0})` },
     { id: "proximo", label: `Próximos 7 dias (${counts.proximo || 0})` },
     { id: "futuro", label: "Futuras" },
-    { id: "pago", label: "Pagas" },
+    { id: "pago", label: `Pagas (${counts.pago || 0})` },
   ];
 
   return (
@@ -4892,6 +5165,35 @@ function Dashboard({ db, user }) {
           </div>
         ))}
       </div>
+
+      {(() => {
+        const abertos = recebimentos
+          .map((r) => ({ ...r, status: recebimentoStatus(r) }))
+          .filter((r) => r.status !== "recebido")
+          .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento))
+          .slice(0, 6);
+        if (!abertos.length) return null;
+        const totalAberto = recebimentos.filter((r) => !r.recebido).reduce((s, r) => s + (Number(r.valor) || 0), 0);
+        return (
+          <div className="panel no-print" data-testid="proximos-recebimentos">
+            <div className="section-head">
+              <h3 className="panel-title">Próximos recebimentos</h3>
+              <span className="muted">Total a receber: <strong>{fmtBRL(totalAberto)}</strong></span>
+            </div>
+            <ul className="prox-list">
+              {abertos.map((r) => (
+                <li key={r.id}>
+                  <span className="prox-data">{fmtDateBR(r.dataVencimento).slice(0, 5)}</span>
+                  <span className="prox-desc">{r.descricao}<small>{recebimentoRef(db, r)}</small></span>
+                  <ProdutoTag nome={recebimentoProduto(db, r).produto} />
+                  <strong className="num">{fmtBRL(r.valor)}</strong>
+                  <Tag tone={r.status === "atrasado" ? "negative" : r.status === "hoje" || r.status === "proximo" ? "brass" : null}>{STATUS_LABEL[r.status]}</Tag>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
 
       {isDir && carteira.itens > 0 && (
         <div className="panel" data-testid="quadro-credito-proprio">
@@ -8870,6 +9172,128 @@ export function AppStyles() {
       .preview-grid { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 12.5px; }
       .preview-grid .num { font-weight: 600; }
 
+
+      /* ===================== Tema leve (v2) =====================
+         Mesma identidade (ink + brass), com mais ar, bordas suaves e menos sombras. */
+      :root {
+        --paper: #F6F6F3; --line: #E9E6DD; --text: #1B2133; --text-muted: #6B6B66;
+        --shadow-sm: 0 1px 2px rgba(20,24,40,0.04); --shadow-md: 0 12px 32px -16px rgba(20,24,40,0.2);
+        --radius: 14px;
+      }
+      .app { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+      .sidebar { width: 248px; background: #FFFFFF; color: var(--text); border-right: 1px solid var(--line); box-shadow: none; padding: 22px 16px 18px; gap: 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+      .sidebar-glow { display: none; }
+      .brand { background: linear-gradient(160deg, var(--ink) 0%, var(--ink-soft) 100%); border-radius: 14px; padding: 16px 12px 14px; margin-bottom: 2px; }
+      .brand-logo { width: 118px; filter: none; }
+      .user-badge { background: #F6F6F3; border: 1px solid var(--line); color: var(--text); border-radius: 12px; padding: 10px 12px; font-weight: 500; }
+      .user-badge .tag-brass { background: #F3EAD3; color: var(--brass-dark); }
+      .nav-group + .nav-group { border-top: none; margin-top: 8px; padding-top: 0; }
+      .nav-section-label { color: #9A978B; font-size: 10.5px; letter-spacing: 0.1em; padding: 10px 10px 4px; }
+      .nav-item { color: #444A5E; border-left: none; border-radius: 10px; padding: 9px 11px; font-size: 13.5px; gap: 11px; }
+      .nav-item svg { color: #8A8F9E; flex-shrink: 0; }
+      .nav-item:hover { background: #F4F2EC; transform: none; color: var(--ink); }
+      .nav-item-active, .nav-item-active:hover { background: #F7F0DE; color: var(--ink); font-weight: 600; border-left: none; box-shadow: inset 3px 0 0 var(--brass); }
+      .nav-item-active svg { color: var(--brass-dark); }
+      .nav-item.logout { color: #A05252; margin-top: 4px; }
+      .nav-item.logout:hover { background: #FBEFEF; }
+      .save-status { color: #8E8B80; }
+      .save-status.error { color: var(--negative); }
+      .build-tag { color: #B9B6AA; }
+      .main { padding: 30px 44px 56px; max-width: 1240px; }
+      .page-header { margin-bottom: 22px; gap: 12px; }
+      .page-header h2 { font-family: inherit; font-weight: 650; font-size: 25px; letter-spacing: -0.015em; color: var(--ink); }
+      .muted { color: var(--text-muted); }
+      .cards-grid { gap: 14px; margin-bottom: 26px; }
+      .stat-card { border-radius: var(--radius); padding: 18px; gap: 8px; box-shadow: none; }
+      .stat-card:hover { box-shadow: var(--shadow-sm); transform: none; border-color: #DCD7C8; }
+      .stat-card-highlight { background: #FFFBF1; border-color: #E6D3A8; }
+      .stat-label { font-size: 12px; color: var(--text-muted); }
+      .stat-value { font-family: inherit; font-size: 22px; font-weight: 650; letter-spacing: -0.015em; color: var(--ink); }
+      .panel { border-radius: 16px; padding: 24px; margin-bottom: 22px; box-shadow: none; }
+      .panel-title { font-family: inherit; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); margin-bottom: 8px; }
+      .panel-note { font-size: 13px; line-height: 1.5; }
+      .subtabs { gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 22px; flex-wrap: wrap; }
+      .subtab { border: none; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; background: transparent; padding: 10px 14px; margin-bottom: -1px; font-size: 13px; color: var(--text-muted); }
+      .subtab:hover { background: #F4F2EC; color: var(--ink); border-color: transparent; }
+      .subtab-active, .subtab-active:hover { background: transparent; color: var(--ink); font-weight: 600; border-bottom-color: var(--brass); box-shadow: none; }
+      .field { gap: 6px; font-size: 12.5px; font-weight: 500; color: #55584F; }
+      .field-hint { font-weight: 400; color: var(--text-muted); font-size: 11.5px; }
+      .input { border-radius: 10px; padding: 10px 12px; background: #FFFFFF; border-color: #E1DDD0; }
+      .input:hover { border-color: #CFC9B6; }
+      .input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px rgba(176,141,82,0.16); }
+      .money-input-wrap { border-radius: 10px; background: #FFFFFF; border-color: #E1DDD0; }
+      .form-grid { gap: 16px 22px; }
+      .form-grid > h3.panel-title { grid-column: 1 / -1; margin: 14px 0 0; padding-top: 20px; border-top: 1px solid var(--line); font-size: 15px; }
+      .form-grid > h3.panel-title:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+      .btn { border-radius: 10px; padding: 9px 16px; font-weight: 500; }
+      .btn-primary { background: var(--ink); box-shadow: none; }
+      .btn-primary:hover { background: #1C2742; box-shadow: 0 6px 16px -8px rgba(11,18,32,0.5); transform: none; }
+      .btn-ghost { background: #FFFFFF; }
+      .btn-ghost:hover { background: #FAF8F2; }
+      .btn-sm { padding: 5px 10px; border-radius: 8px; }
+      .tag { background: #F1EFE8; color: #5E5F58; font-weight: 500; padding: 3px 9px; }
+      .tag-brass { background: #F3EAD3; color: var(--brass-dark); }
+      .tag-positive, .tag-green { background: #E3F0E7; color: #2F6B45; }
+      .tag-negative { background: #F6E3E3; color: #8C3B3B; }
+      .table { border-radius: var(--radius); box-shadow: none; }
+      .table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; color: #8A8678; background: #FAF9F5; padding: 12px 14px; }
+      .table td { padding: 13px 14px; }
+      .table tbody tr:hover td { background: #FCFBF8; }
+      .table tfoot td { background: #FAF9F5; border-top: 1px solid var(--line); }
+      .table-scroll .table thead th:last-child, .table-scroll .table tfoot td:last-child { background: #FAF9F5; }
+      .table-scroll .table td:last-child { box-shadow: -8px 0 8px -8px rgba(20,24,40,0.12); }
+      .simple-list li { padding: 12px 2px; }
+      .search-box { border-radius: 10px; padding: 9px 12px; }
+      .empty-state { border-radius: 12px; background: #FCFBF8; padding: 18px; }
+      .alert-banner { border-radius: 12px; background: #FFF6E8; border-color: #F0DAB0; }
+      .preview-box { background: #FBF8F0; border-color: #EEE2C4; border-radius: 12px; }
+      .preview-box strong { font-family: inherit; font-weight: 650; }
+      .seg { background: #F1EFE8; border-color: transparent; }
+      .seg button.seg-active { background: #FFFFFF; color: var(--ink); box-shadow: 0 1px 2px rgba(20,24,40,0.12); font-weight: 600; }
+      .podium-slot, .share-bar { box-shadow: none; }
+      .login-title { font-family: inherit; font-weight: 650; }
+
+      /* --- tipo de operação (cards de escolha) e avisos --- */
+      .tipo-op { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 6px 0 4px; }
+      .tipo-card { text-align: left; font: inherit; color: var(--text); background: #FFFFFF; border: 1px solid var(--line); border-radius: 16px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; gap: 8px;
+        transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+      .tipo-card:hover { border-color: var(--brass); background: #FFFDF8; box-shadow: var(--shadow-md); }
+      .tipo-card:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(176,141,82,0.3); border-color: var(--brass); }
+      .tipo-card-icon { width: 38px; height: 38px; border-radius: 11px; background: #F3EAD3; color: var(--brass-dark); display: flex; align-items: center; justify-content: center; }
+      .tipo-card strong { font-size: 15px; font-weight: 650; color: var(--ink); }
+      .tipo-card p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
+      .tipo-card ul { margin: 2px 0 0; padding-left: 16px; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+      .tipo-chip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: 12px; background: #FBF8F0; border: 1px solid #EEE2C4; font-size: 13px; }
+      .tipo-chip strong { font-weight: 650; }
+      .toast { position: fixed; right: 24px; bottom: 24px; z-index: 50; background: var(--ink); color: #F7F1E4; padding: 12px 16px; border-radius: 12px; font-size: 13.5px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow-md); animation: toast-in .2s ease; }
+      @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      .prox-list { list-style: none; margin: 0; padding: 0; }
+      .prox-list li { display: grid; grid-template-columns: 74px 1fr auto auto auto; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+      .prox-list li:last-child { border-bottom: none; }
+      .prox-data { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+      .prox-desc small { display: block; color: var(--text-muted); font-size: 12px; }
+      .panel .cards-grid { margin-bottom: 0; }
+      .agenda-table th, .agenda-table td { white-space: normal; vertical-align: middle; }
+      .agenda-table td:nth-child(1) { white-space: nowrap; }
+      .agenda-table td.num { white-space: nowrap; }
+      .tag-blue { background: #E3ECF7; color: #2F5C8F; }
+      .tag-plum { background: #EDE6F5; color: #6A4A8C; }
+      .tag-teal { background: #DFF0EE; color: #2D6F69; }
+      .tag-sand { background: #F3EAD7; color: #8A6A2B; }
+      .tag-rose { background: #F8E4E4; color: #9A4545; }
+      .toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin: 4px 0 14px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+      .toolbar-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted); }
+      .toolbar-field select { min-width: 180px; }
+      .toolbar-check { margin: 0; font-size: 13px; }
+      .toolbar-total { margin-left: auto; font-size: 13px; }
+      .agenda-table tr.group-row td { background: #F7F4EC; border-bottom: 1px solid var(--line); padding: 9px 12px; font-size: 12.5px; }
+      .agenda-table .natureza { display: block; margin: 3px 0 0 8px; font-size: 10.5px; color: var(--text-muted); }
+      .agenda-actions button { white-space: nowrap; }
+      .agenda-table td:last-child { white-space: nowrap; }
+      .agenda-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+      .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+      @media (max-width: 760px) { .tipo-op { grid-template-columns: 1fr; } .prox-list li { grid-template-columns: 60px 1fr auto; } .prox-list li > :nth-child(n+4) { display: none; } }
+
       /* Responsivo: celular e telas estreitas */
       @media (max-width: 760px) {
         .app { flex-direction: column; }
@@ -8977,6 +9401,39 @@ export function AppStyles() {
       }
 
       /* Impressão / exportar PDF: mostra só o conteúdo do relatório */
+
+      /* mobile: menu lateral vira barra horizontal rolável (vem depois do tema) */
+      @media (max-width: 760px) {
+        .sidebar { position: static; height: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); padding: 12px 14px; gap: 8px; overflow: visible; }
+        .brand { padding: 10px 14px; flex: 0 0 auto; }
+        .brand-logo { width: 92px; }
+        .user-badge { display: none; }
+        .sidebar .nav { flex-wrap: nowrap; overflow-x: auto; flex: 1 1 100%; order: 3; padding-bottom: 4px; scrollbar-width: none; }
+        .sidebar .nav::-webkit-scrollbar { display: none; }
+        .sidebar .nav-group { flex-wrap: nowrap; }
+        .sidebar .nav-item { white-space: nowrap; border-radius: 999px; padding: 7px 12px; box-shadow: none; background: #F6F6F3; }
+        .sidebar .nav-item-active { background: #F3EAD3; box-shadow: none; border-bottom: none; }
+        .sidebar .nav-item.logout { margin-left: auto; order: 2; padding: 7px 10px; background: transparent; }
+        .main { padding: 18px 16px 40px; }
+        .stat-value { font-size: 19px; }
+        .subtabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+        .subtab { white-space: nowrap; }
+        .toast { left: 16px; right: 16px; bottom: 16px; }
+      }
+
+      /* ===================== Cantos arredondados (v3) ===================== */
+      :root { --radius: 18px; --radius-sm: 12px; }
+      .panel, .stat-card, .table, .podium-slot, .badge-card, .link-card, .pcal-cell, .empty-state, .alert-banner, .preview-box, .toolbar-row { border-radius: 18px; }
+      .table { overflow: hidden; }
+      .input, .money-input-wrap, .search-box, .btn, .nav-item, .user-badge, .tipo-chip, .toast { border-radius: 14px; }
+      .btn-sm { border-radius: 11px; }
+      .icon-btn { border-radius: 10px; }
+      .tipo-card, .tipo-card-icon { border-radius: 18px; }
+      .tipo-card-icon { border-radius: 14px; }
+      .subtab { border-radius: 12px 12px 0 0; }
+      .tag { border-radius: 999px; padding: 3px 9px; }
+      .login-card, .modal, .dialog { border-radius: 22px; }
+
       @media print {
         .sidebar, .no-print, .subtabs, .empty-state { display: none !important; }
         .app { display: block; }
