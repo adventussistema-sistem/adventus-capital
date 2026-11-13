@@ -9144,7 +9144,7 @@ export default function App({ authEmail, onSignOut } = {}) {
   );
 }
 
-export // Rotula cada célula com o título da coluna (usado no celular, onde a tabela vira lista de cartões)
+// Rotula cada célula com o título da coluna (usado no celular, onde a tabela vira lista de cartões)
 function TabelasResponsivas() {
   useEffect(() => {
     let raf = 0;
@@ -9173,7 +9173,7 @@ function TabelasResponsivas() {
   }, []);
   return null;
 }
-function AppStyles() {
+export function AppStyles() {
   return (
     <style>{`
       :root {
