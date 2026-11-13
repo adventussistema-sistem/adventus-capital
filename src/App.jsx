@@ -2355,6 +2355,7 @@ function OperacoesPage({ db, mutate, user }) {
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
   const [produtoFiltro, setProdutoFiltro] = useState("todos");
+  const [ordem, setOrdem] = useState("recentes");
   const [aviso, setAviso] = useState("");
   const institutionName = (id) => db.institutions.find((b) => b.id === id)?.nome || "—";
   const clientName = (id) => db.clients.find((c) => c.id === id)?.nome || "—";
@@ -2376,7 +2377,7 @@ function OperacoesPage({ db, mutate, user }) {
           : [...d.honorarios, { id: uid(), operacaoId: editingId, ...data.honorario }];
       } else {
         const newId = uid();
-        operations = [...d.operations, { id: newId, ...data.operacao }];
+        operations = [...d.operations, { id: newId, criadoEm: Date.now(), ...data.operacao }];
         honorarios = [...d.honorarios, { id: uid(), operacaoId: newId, ...data.honorario }];
       }
       return { ...d, operations, honorarios };
@@ -2392,9 +2393,20 @@ function OperacoesPage({ db, mutate, user }) {
 
   const term = search.trim().toLowerCase();
   const porProduto = produtoFiltro === "todos" ? visibleOps : visibleOps.filter((o) => normTxt(opProduto(db, o)) === normTxt(produtoFiltro));
-  const filteredOperations = term
+  const buscadas = term
     ? porProduto.filter((o) => `${o.numero} ${institutionName(o.instituicaoId)} ${clientName(o.clienteId)} ${opProduto(db, o)}`.toLowerCase().includes(term))
     : porProduto;
+  // ordem: mais recentes primeiro (quem foi lançado por último aparece no topo)
+  const filteredOperations = useMemo(() => {
+    const idx = new Map(db.operations.map((o, i) => [o.id, i]));
+    const lanc = (a, b) => (b.criadoEm || 0) - (a.criadoEm || 0) || idx.get(b.id) - idx.get(a.id);
+    const arr = [...buscadas];
+    if (ordem === "credito") arr.sort((a, b) => String(opDataCredito(db, b) || "").localeCompare(String(opDataCredito(db, a) || "")) || lanc(a, b));
+    else if (ordem === "numero") arr.sort((a, b) => String(b.numero).localeCompare(String(a.numero), "pt-BR", { numeric: true }) || lanc(a, b));
+    else if (ordem === "antigas") arr.sort((a, b) => -lanc(a, b));
+    else arr.sort(lanc);
+    return arr;
+  }, [buscadas, ordem, db]);
   const contagemProdutos = visibleOps.reduce((acc, o) => {
     const k = normTxt(opProduto(db, o));
     acc[k] = (acc[k] || 0) + 1;
@@ -2419,6 +2431,12 @@ function OperacoesPage({ db, mutate, user }) {
             <Search size={14} />
             <input className="input" placeholder="Buscar por nº, instituição, cliente ou produto…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
+          <Select value={ordem} onChange={(e) => setOrdem(e.target.value)} aria-label="Ordenar operações" data-testid="ordem-operacoes" style={{ width: "auto", minWidth: 200 }}>
+            <option value="recentes">Mais recentes primeiro</option>
+            <option value="credito">Data do crédito (recente → antiga)</option>
+            <option value="numero">Nº da operação (maior → menor)</option>
+            <option value="antigas">Mais antigas primeiro</option>
+          </Select>
           <div className="chip-row" data-testid="filtro-produto" role="group" aria-label="Filtrar por produto" style={{ flexBasis: "100%" }}>
             <button type="button" className={`chip ${produtoFiltro === "todos" ? "chip-active" : ""}`} data-produto="todos" onClick={() => setProdutoFiltro("todos")}>
               Todos <b>{visibleOps.length}</b>
@@ -9029,6 +9047,7 @@ export default function App({ authEmail, onSignOut } = {}) {
     return (
       <div className="app">
         <AppStyles />
+      <TabelasResponsivas />
         <div className="login-screen">
           <div className="login-main" style={{ margin: "auto" }}>
             <div className="login-card">
@@ -9049,6 +9068,7 @@ export default function App({ authEmail, onSignOut } = {}) {
     return (
       <div className="app">
         <AppStyles />
+      <TabelasResponsivas />
         <p style={{ padding: 40 }}>Carregando…</p>
       </div>
     );
@@ -9058,6 +9078,7 @@ export default function App({ authEmail, onSignOut } = {}) {
     return (
       <div className="app">
         <AppStyles />
+      <TabelasResponsivas />
         <LoginScreen users={db.users} onLogin={handleLogin} seeded={seededAdmin} />
       </div>
     );
@@ -9068,6 +9089,7 @@ export default function App({ authEmail, onSignOut } = {}) {
   return (
     <div className="app">
       <AppStyles />
+      <TabelasResponsivas />
       <aside className="sidebar">
         <div className="sidebar-glow" aria-hidden="true" />
         <div className="brand">
@@ -9122,7 +9144,36 @@ export default function App({ authEmail, onSignOut } = {}) {
   );
 }
 
-export function AppStyles() {
+export // Rotula cada célula com o título da coluna (usado no celular, onde a tabela vira lista de cartões)
+function TabelasResponsivas() {
+  useEffect(() => {
+    let raf = 0;
+    const rotular = () => {
+      raf = 0;
+      document.querySelectorAll("table.table").forEach((t) => {
+        const heads = [...t.querySelectorAll("thead th")].map((h) => h.textContent.trim());
+        t.querySelectorAll("tbody tr, tfoot tr").forEach((tr) => {
+          let i = 0;
+          [...tr.children].forEach((td) => {
+            if (td.tagName !== "TD") return;
+            const lab = td.colSpan > 1 ? "" : heads[i] || "";
+            if (td.getAttribute("data-label") !== lab) td.setAttribute("data-label", lab);
+            const curto = /^(R\$\s?-?[\d.,]+|-?[\d.,]+%?|\d{1,2}\/\d{1,2}(\/\d{2,4})?|—|-)$/.test(td.textContent.trim());
+            if (td.classList.contains("nw") !== curto) td.classList.toggle("nw", curto);
+            i += td.colSpan || 1;
+          });
+        });
+      });
+    };
+    const agendar = () => { if (!raf) raf = window.requestAnimationFrame(rotular); };
+    agendar();
+    const mo = new MutationObserver(agendar);
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => { mo.disconnect(); if (raf) window.cancelAnimationFrame(raf); };
+  }, []);
+  return null;
+}
+function AppStyles() {
   return (
     <style>{`
       :root {
@@ -9161,7 +9212,7 @@ export function AppStyles() {
       .save-status { margin-top: auto; font-size: 11px; color: #8891AE; position: relative; z-index: 1; }
       .save-status.error { color: #D48A8A; }
       .build-tag { font-size: 10px; color: #5C6483; position: relative; z-index: 1; }
-      .main { flex: 1; min-width: 0; padding: 34px 40px; max-width: 1220px; }
+      .main { flex: 1; min-width: 0; padding: 34px 40px; max-width: none; }
       .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
       .page-header h2 { font-family: Georgia, serif; font-weight: 500; font-size: 24px; margin: 0; letter-spacing: 0.01em; }
       .muted { color: var(--text-muted); font-size: 13px; margin: 4px 0 0; }
@@ -9324,7 +9375,7 @@ export function AppStyles() {
       .save-status { color: #8E8B80; }
       .save-status.error { color: var(--negative); }
       .build-tag { color: #B9B6AA; }
-      .main { padding: 30px 44px 56px; max-width: 1240px; }
+      .main { padding: 30px 44px 56px; max-width: none; width: 100%; }
       .page-header { margin-bottom: 22px; gap: 12px; }
       .page-header h2 { font-family: inherit; font-weight: 650; font-size: 25px; letter-spacing: -0.015em; color: var(--ink); }
       .muted { color: var(--text-muted); }
@@ -9429,7 +9480,7 @@ export function AppStyles() {
       .agenda-table td:last-child { white-space: nowrap; }
       .agenda-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
       .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-      @media (max-width: 760px) { .tipo-op { grid-template-columns: 1fr; } .prox-list li { grid-template-columns: 60px 1fr auto; } .prox-list li > :nth-child(n+4) { display: none; } }
+      @media (max-width: 900px) { .tipo-op { grid-template-columns: 1fr; } .prox-list li { grid-template-columns: 56px minmax(0, 1fr) auto; } .prox-list li > :nth-child(n+4) { display: none; } .prox-desc { min-width: 0; overflow-wrap: anywhere; } }
 
       /* Responsivo: celular e telas estreitas */
       @media (max-width: 760px) {
@@ -9570,6 +9621,38 @@ export function AppStyles() {
       .subtab { border-radius: 12px 12px 0 0; }
       .tag { border-radius: 999px; padding: 3px 9px; }
       .login-card, .modal, .dialog { border-radius: 22px; }
+
+      /* ===================== Tabelas sem cortes (v4) ===================== */
+      .table th, .table td { white-space: normal; overflow-wrap: normal; word-break: normal; }
+      /* datas, valores e números ficam numa linha só (a classe "nw" é posta pelo script TabelasResponsivas) */
+      .table td.nw { white-space: nowrap; }
+      .tag { white-space: nowrap; }
+      .sidebar .tag { white-space: normal; }
+      @media (max-width: 1560px) { .main { padding-left: 26px; padding-right: 26px; } .sidebar { width: 216px; } .table th, .table td { padding-left: 6px; padding-right: 6px; } .table { font-size: 12.5px; } .table th { letter-spacing: 0.01em; font-size: 10.5px; } .table td .tag { padding: 2px 6px; margin-left: 0; } }
+      .cards-grid { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+      .stat-card, .panel, .field, .input { min-width: 0; }
+      .stat-card .stat-value, .stat-value { overflow-wrap: anywhere; }
+      .page-header { flex-wrap: wrap; gap: 12px; }
+      .inline-form { flex-wrap: wrap; }
+      @media (max-width: 900px) { .form-grid { grid-template-columns: 1fr !important; } .field .input, .field select { max-width: 100%; } }
+      @media (max-width: 1400px) { .table th, .table td { padding-left: 5px; padding-right: 5px; } }
+      @media (max-width: 1280px) {
+        .table-scroll { overflow: visible; }
+        .table-scroll .table th:last-child, .table-scroll .table td:last-child { position: static; box-shadow: none; }
+        .table, .table tbody, .table tfoot, .table tr, .table td { display: block; width: 100%; }
+        .table { background: transparent; border: none; box-shadow: none; }
+        .table thead { display: none; }
+        .table tr { margin: 0 0 12px; padding: 4px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+        .table td, .table td[data-label] { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 0; border-bottom: 1px dashed var(--line); text-align: right; white-space: normal; min-width: 0; }
+        .table td:last-child { border-bottom: none; }
+        .table td::before { content: attr(data-label); flex: 0 0 38%; max-width: 42%; text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+        .table td[data-label=""]::before { content: none; }
+        .table td[data-label=""] { justify-content: flex-start; text-align: left; }
+        .table tr.group-row { background: transparent; border: none; padding: 0; margin: 14px 0 6px; }
+        .table tr.group-row td { background: transparent; padding: 4px 2px; border: none; }
+        .agenda-table td:last-child, .agenda-table td:nth-child(1) { white-space: normal; }
+        .agenda-actions { align-items: flex-end; }
+      }
 
       @media print {
         .sidebar, .no-print, .subtabs, .empty-state { display: none !important; }
