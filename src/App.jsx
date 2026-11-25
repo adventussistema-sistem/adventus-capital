@@ -213,6 +213,95 @@ function recebimentoStatus(rec) {
   return "futuro";
 }
 
+// "dias para vencer" em texto curto: hoje / em 3 d / 3 d em atraso
+function diasTexto(dataISO) {
+  const d = daysUntil(dataISO);
+  if (d === 0) return "hoje";
+  return d > 0 ? `em ${d} d` : `${-d} d em atraso`;
+}
+const FAIXAS_ATRASO = [
+  { de: 1, ate: 15, label: "1–15 dias" },
+  { de: 16, ate: 30, label: "16–30 dias" },
+  { de: 31, ate: 45, label: "31–45 dias" },
+  { de: 46, ate: 60, label: "46–60 dias" },
+  { de: 61, ate: 90, label: "61–90 dias" },
+  { de: 91, ate: Infinity, label: "90+ dias" },
+];
+// Carteira a receber: quanto está vencido, vence hoje, nos próximos 7 dias e depois — a soma sempre fecha com o total
+function CarteiraComposicao({ itens, ativo, onPick, testid = "carteira-composicao" }) {
+  const abertos = itens.filter((r) => !r.recebido);
+  const soma = (f) => abertos.filter(f).reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const cont = (f) => abertos.filter(f).length;
+  const st = (r) => r.status || recebimentoStatus(r);
+  const blocos = [
+    { id: "atrasado", label: "Vencido", cor: "#B0413E", dica: "Já passou da data — prioridade de cobrança" },
+    { id: "hoje", label: "Vence hoje", cor: "#B8892B", dica: "Vence hoje, ainda sem baixa" },
+    { id: "proximo", label: "Vence em 1–7 dias", cor: "#6B7280", dica: "Nos próximos 7 dias" },
+    { id: "futuro", label: "Vence em +7 dias", cor: "#2F7D4F", dica: "Fora da janela de curto prazo" },
+  ].map((b) => ({ ...b, valor: round2(soma((r) => st(r) === b.id)), qtd: cont((r) => st(r) === b.id) }));
+  const total = round2(blocos.reduce((s, b) => s + b.valor, 0));
+  const pct = (v) => (total > 0 ? (v / total) * 100 : 0);
+  const vencidos = abertos.filter((r) => st(r) === "atrasado");
+  return (
+    <div className="panel carteira" data-testid={testid}>
+      <div className="section-head">
+        <h3 className="panel-title">Carteira a receber</h3>
+        <span className="muted">
+          Em aberto: <strong data-testid="carteira-total">{fmtBRL(total)}</strong> · {abertos.length} recebimento(s)
+        </span>
+      </div>
+      <div className="carteira-bar" role="img" aria-label="Composição da carteira por vencimento">
+        {total > 0 ? (
+          blocos.filter((b) => b.valor > 0).map((b) => (
+            <span key={b.id} style={{ width: `${pct(b.valor)}%`, background: b.cor }} title={`${b.label}: ${fmtBRL(b.valor)}`} />
+          ))
+        ) : (
+          <span style={{ width: "100%", background: "#E5E2D8" }} />
+        )}
+      </div>
+      <div className="carteira-cards">
+        {blocos.map((b) => {
+          const Tagname = onPick ? "button" : "div";
+          return (
+            <Tagname
+              key={b.id}
+              type={onPick ? "button" : undefined}
+              className={`carteira-card ${ativo === b.id ? "is-active" : ""}`}
+              data-bloco={b.id}
+              onClick={onPick ? () => onPick(ativo === b.id ? "todos" : b.id) : undefined}
+              title={b.dica}
+            >
+              <span className="carteira-dot" style={{ background: b.cor }} />
+              <span className="carteira-label">{b.label}</span>
+              <strong className="num" style={{ color: b.id === "atrasado" && b.valor > 0 ? b.cor : undefined }}>{fmtBRL(b.valor)}</strong>
+              <small>{b.qtd} {b.qtd === 1 ? "recebimento" : "recebimentos"} · {pct(b.valor).toFixed(1).replace(".", ",")}%</small>
+            </Tagname>
+          );
+        })}
+      </div>
+      <p className="carteira-soma" data-testid="carteira-soma">
+        {blocos.map((b) => fmtBRL(b.valor).replace("R$", "").trim()).join(" + ")} = <strong>{fmtBRL(total)}</strong>
+      </p>
+      {vencidos.length > 0 && (
+        <div className="faixas-atraso" data-testid="faixas-atraso">
+          <span className="faixas-titulo">Atraso por faixa</span>
+          {FAIXAS_ATRASO.map((f) => {
+            const its = vencidos.filter((r) => { const d = -daysUntil(r.dataVencimento); return d >= f.de && d <= f.ate; });
+            const v = its.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+            return (
+              <span key={f.label} className={`faixa ${its.length ? "faixa-on" : ""}`} data-faixa={f.label}>
+                <small>{f.label}</small>
+                <strong className="num">{fmtBRL(v)}</strong>
+                <em>{its.length} {its.length === 1 ? "título" : "títulos"}</em>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATUS_LABEL = {
   recebido: "Recebido",
   atrasado: "Atrasado",
@@ -3100,6 +3189,8 @@ function AgendaPage({ db, mutate, user }) {
 
       {(showForm || editingId) && <RecebimentoForm db={db} editing={editing} onCancel={() => { setShowForm(false); setEditingId(null); }} onSave={save} />}
 
+      <CarteiraComposicao itens={porProduto} ativo={filter} onPick={setFilter} testid="agenda-carteira" />
+
       <div className="subtabs">
         {filters.map((f) => (
           <button key={f.id} className={`subtab ${filter === f.id ? "subtab-active" : ""}`} onClick={() => setFilter(f.id)}>
@@ -3167,7 +3258,10 @@ function AgendaPage({ db, mutate, user }) {
                 )}
             {g.itens.map((r) => (
               <tr key={r.id}>
-                <td>{new Date(r.dataVencimento + "T00:00:00").toLocaleDateString("pt-BR")}</td>
+                <td>
+                  {new Date(r.dataVencimento + "T00:00:00").toLocaleDateString("pt-BR")}
+                  {!r.recebido && <small className={`dias dias-${r.status}`} data-testid="dias-chip">{diasTexto(r.dataVencimento)}</small>}
+                </td>
                 <td data-testid="col-produto">
                   <ProdutoTag nome={r.produto} />
                 </td>
@@ -5309,6 +5403,12 @@ function Dashboard({ db, user }) {
         ))}
       </div>
 
+      {recebimentos.some((r) => !r.recebido) && (
+        <div className="no-print">
+          <CarteiraComposicao itens={recebimentos.map((r) => ({ ...r, status: recebimentoStatus(r) }))} testid="painel-carteira" />
+        </div>
+      )}
+
       {(() => {
         const abertos = recebimentos
           .map((r) => ({ ...r, status: recebimentoStatus(r) }))
@@ -5326,7 +5426,7 @@ function Dashboard({ db, user }) {
             <ul className="prox-list">
               {abertos.map((r) => (
                 <li key={r.id}>
-                  <span className="prox-data">{fmtDateBR(r.dataVencimento).slice(0, 5)}</span>
+                  <span className="prox-data">{fmtDateBR(r.dataVencimento).slice(0, 5)}<small className={`dias dias-${r.status}`}>{diasTexto(r.dataVencimento)}</small></span>
                   <span className="prox-desc">{r.descricao}<small>{recebimentoRef(db, r)}</small></span>
                   <ProdutoTag nome={recebimentoProduto(db, r).produto} />
                   <strong className="num">{fmtBRL(r.valor)}</strong>
@@ -9457,6 +9557,26 @@ export function AppStyles() {
       .tag-teal { background: #DFF0EE; color: #2D6F69; }
       .tag-sand { background: #F3EAD7; color: #8A6A2B; }
       .tag-rose { background: #F8E4E4; color: #9A4545; }
+      .carteira { margin-bottom: 18px; }
+      .carteira-bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: #E5E2D8; margin: 4px 0 14px; }
+      .carteira-bar span { display: block; min-width: 3px; }
+      .carteira-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+      .carteira-card { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; color: var(--text); min-width: 0; position: relative; }
+      button.carteira-card { cursor: pointer; }
+      button.carteira-card:hover { border-color: var(--brass); }
+      .carteira-card.is-active { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink) inset; }
+      .carteira-card .num { font-size: 18px; }
+      .carteira-card small { color: var(--text-muted); font-size: 11.5px; }
+      .carteira-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); padding-left: 16px; }
+      .carteira-dot { position: absolute; left: 14px; top: 17px; width: 8px; height: 8px; border-radius: 999px; }
+      .carteira-soma { margin: 10px 2px 0; font-size: 12px; color: var(--text-muted); }
+      .faixas-atraso { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+      .faixas-titulo { flex: 1 0 100%; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+      .faixa { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 12px; background: #F6F4EE; min-width: 120px; flex: 1 1 120px; opacity: 0.6; }
+      .faixa.faixa-on { background: #F8E4E4; opacity: 1; }
+      .faixa small { font-size: 10.5px; color: var(--text-muted); } .faixa em { font-style: normal; font-size: 11px; color: var(--text-muted); }
+      .dias { display: block; margin-top: 2px; font-size: 10.5px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+      .dias-atraso, .dias-atrasado { color: #B0413E; } .dias-hoje { color: #B8892B; } .dias-futuro { color: #2F7D4F; }
       .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
