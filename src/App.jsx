@@ -4583,18 +4583,121 @@ function InstituicoesRankingPanel({ db, user }) {
   );
 }
 
+// Concentração da receita: de quem/onde vem o dinheiro e o quanto depende de poucos nomes
+function ConcentracaoPanel({ db, user }) {
+  const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
+  const [dim, setDim] = useState("cliente");
+  const [metrica, setMetrica] = useState("liquido");
+  const bounds = periodRange(period, periodoCustom);
+  const todos = visibleHonorarios(db, user);
+  const hons = (bounds ? todos.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : todos).filter((h) => {
+    const op = db.operations.find((o) => o.id === h.operacaoId);
+    return !op || opStatus(op) !== "cancelada";
+  });
+  const DIMS = [
+    { id: "cliente", label: "Cliente", chave: (h) => [h.clienteId || "x", db.clients.find((c) => c.id === h.clienteId)?.nome || "Cliente removido"] },
+    { id: "produto", label: "Produto", chave: (h) => { const n = String(h.modalidade || "").trim() || SEM_PRODUTO; return [normTxt(n), n]; } },
+    { id: "instituicao", label: "Instituição", chave: (h) => { const op = db.operations.find((o) => o.id === h.operacaoId); const b = db.institutions.find((i) => i.id === op?.instituicaoId); return [b?.id || "x", b?.nome || "Sem instituição"]; } },
+    { id: "colaborador", label: "Colaborador", chave: (h) => [h.colaboradorId || "x", db.collaborators.find((c) => c.id === h.colaboradorId)?.nome || "Sem colaborador"] },
+  ];
+  const D = DIMS.find((x) => x.id === dim);
+  const valorDe = (h) => (metrica === "liquido" ? honorarioLiquido(h) : Number(h.valorLiberado) || 0);
+  const mapa = new Map();
+  hons.forEach((h) => {
+    const [k, nome] = D.chave(h);
+    const g = mapa.get(k) || { nome, valor: 0, qtd: 0 };
+    g.valor = round2(g.valor + valorDe(h));
+    g.qtd += 1;
+    mapa.set(k, g);
+  });
+  const lista = [...mapa.values()].sort((a, b) => b.valor - a.valor);
+  const total = round2(lista.reduce((t, g) => t + g.valor, 0));
+  const pct = (v) => (total > 0 ? (v / total) * 100 : 0);
+  const topN = (n) => pct(lista.slice(0, n).reduce((t, g) => t + g.valor, 0));
+  const fmtP = (n) => n.toFixed(1).replace(".", ",") + "%";
+  const alerta = lista.length > 1 && pct(lista[0].valor) >= 30;
+  const exportar = () => baixarCSV(`concentracao-${dim}`, [D.label, "Operações", metrica === "liquido" ? "Honorário líquido" : "Valor liberado", "% do total", "% acumulado"],
+    lista.map((g, i) => [g.nome, g.qtd, g.valor, round2(pct(g.valor)), round2(pct(lista.slice(0, i + 1).reduce((t, x) => t + x.valor, 0)))]));
+  let acum = 0;
+  return (
+    <div data-testid="concentracao">
+      <div className="page-header">
+        <div>
+          <h2 style={{ fontSize: 16 }}>Concentração da receita</h2>
+          <p className="muted">Quanto do resultado depende de poucos clientes, produtos, instituições ou colaboradores. Operações canceladas ficam de fora.</p>
+        </div>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
+      </div>
+      <div className="chip-row" role="group" aria-label="Agrupar por" style={{ marginBottom: 8 }}>
+        {DIMS.map((x) => (
+          <button type="button" key={x.id} className={`chip ${dim === x.id ? "chip-active" : ""}`} data-dim={x.id} onClick={() => setDim(x.id)}>{x.label}</button>
+        ))}
+      </div>
+      <div className="toolbar-row">
+        <label className="toolbar-field"><span>Medir por</span>
+          <Select value={metrica} onChange={(e) => setMetrica(e.target.value)} data-testid="conc-metrica">
+            <option value="liquido">Honorário líquido</option>
+            <option value="liberado">Valor liberado</option>
+          </Select>
+        </label>
+        <span className="muted toolbar-total">Total: <strong>{fmtBRL(total)}</strong> · {lista.length} {lista.length === 1 ? "item" : "itens"}</span>
+        <BtnExportar onClick={exportar} total={lista.length} testid="conc-exportar" />
+      </div>
+      {lista.length === 0 ? (
+        <EmptyState text="Nenhum honorário no período." />
+      ) : (
+        <>
+          <div className="cards-grid">
+            <div className="stat-card"><span className="stat-label">Maior ({lista[0].nome})</span><span className="stat-value" data-testid="conc-top1">{fmtP(topN(1))}</span></div>
+            <div className="stat-card"><span className="stat-label">3 maiores</span><span className="stat-value" data-testid="conc-top3">{fmtP(topN(3))}</span></div>
+            <div className="stat-card"><span className="stat-label">5 maiores</span><span className="stat-value" data-testid="conc-top5">{fmtP(topN(5))}</span></div>
+          </div>
+          {alerta && (
+            <div className="alert-banner" data-testid="conc-alerta">
+              <Bell size={16} /><span>Atenção: {lista[0].nome} concentra {fmtP(pct(lista[0].valor))} do total. Dependência alta de um único nome.</span>
+            </div>
+          )}
+          <div className="table-scroll">
+            <table className="table">
+              <thead><tr><th>#</th><th>{D.label}</th><th>Operações</th><th>{metrica === "liquido" ? "Honorário líquido" : "Valor liberado"}</th><th>% do total</th><th>% acumulado</th><th></th></tr></thead>
+              <tbody>
+                {lista.map((g, i) => {
+                  acum += g.valor;
+                  return (
+                    <tr key={g.nome + i} data-conc-linha={g.nome}>
+                      <td>{i + 1}</td>
+                      <td className="strong">{g.nome}</td>
+                      <td className="num">{g.qtd}</td>
+                      <td className="num">{fmtBRL(g.valor)}</td>
+                      <td className="num">{fmtP(pct(g.valor))}</td>
+                      <td className="num">{fmtP(pct(acum))}</td>
+                      <td style={{ minWidth: 120 }}><span className="rk-bar" style={{ display: "block" }}><i style={{ width: Math.max(2, pct(g.valor)) + "%" }} /></span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RelatoriosPage({ db, user }) {
   const [tab, setTab] = useState("clientes");
   const tabs = [
     { id: "clientes", label: "Clientes", icon: Users },
     { id: "parceiros", label: "Parceiros", icon: Handshake },
     { id: "instituicoes", label: "Instituições financeiras", icon: Landmark },
+    { id: "concentracao", label: "Concentração", icon: Percent },
   ];
   return (
     <div>
       <div className="subtabs">
         {tabs.map((t) => (
-          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} data-tab={t.id} onClick={() => setTab(t.id)}>
             <t.icon size={14} />
             {t.label}
           </button>
@@ -4603,6 +4706,7 @@ function RelatoriosPage({ db, user }) {
       {tab === "clientes" && <ClientesRankingPanel db={db} user={user} />}
       {tab === "parceiros" && <ParceirosRankingPanel db={db} user={user} />}
       {tab === "instituicoes" && <InstituicoesRankingPanel db={db} user={user} />}
+      {tab === "concentracao" && <ConcentracaoPanel db={db} user={user} />}
     </div>
   );
 }
