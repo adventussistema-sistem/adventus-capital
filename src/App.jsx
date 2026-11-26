@@ -362,6 +362,11 @@ function opStatus(o) {
   return o?.recebidoBanco ? "paga" : "aprovada";
 }
 const opStatusInfo = (o) => STATUS_OPERACAO.find((x) => x.id === opStatus(o));
+// honorário de operação cancelada não conta em resultado, metas e comissões
+const honorarioAtivo = (db, h) => {
+  const op = (db.operations || []).find((o) => o.id === h.operacaoId);
+  return !op || opStatus(op) !== "cancelada";
+};
 
 // ---- listas: exportar CSV, filtros recolhíveis e paginação (usados em várias telas) ----
 // CSV para Excel pt-BR: separador ";", vírgula decimal e BOM (acentos corretos)
@@ -579,7 +584,7 @@ function honorarioLiquido(h) {
 }
 
 function computeMonthlyConsultor(db, colaboradorId, ym) {
-  const honorariosMes = db.honorarios.filter((h) => h.colaboradorId === colaboradorId && monthKey(h.dataCredito) === ym);
+  const honorariosMes = db.honorarios.filter((h) => h.colaboradorId === colaboradorId && monthKey(h.dataCredito) === ym && honorarioAtivo(db, h));
   const bruto = honorariosMes.reduce((s, h) => s + (Number(h.valorHonorario) || 0), 0);
   const liquido = honorariosMes.reduce((s, h) => s + honorarioLiquido(h), 0);
   const metas = db.metas || {};
@@ -2894,7 +2899,7 @@ function computeHonorario(h) {
 // crédito, esteja o dinheiro recebido ou não — é a foto de resultado da
 // empresa, comparável mês a mês.
 function dreMes(db, ym) {
-  const honorariosMes = db.honorarios.filter((h) => monthKey(h.dataCredito) === ym);
+  const honorariosMes = db.honorarios.filter((h) => monthKey(h.dataCredito) === ym && honorarioAtivo(db, h));
   const receitaHonorarioBruto = honorariosMes.reduce((s, h) => s + (Number(h.valorHonorario) || 0), 0);
   const repasseParceiros = honorariosMes.reduce((s, h) => s + (Number(h.valorParceiro) || 0), 0);
   const impostos = honorariosMes.reduce((s, h) => s + (Number(h.imposto) || 0), 0);
@@ -4149,9 +4154,65 @@ function DreLine({ label, value, tone, indent, strong }) {
   );
 }
 
+// DRE com os meses lado a lado (colunas) + total do período
+function DREColunas({ db }) {
+  const [n, setN] = useState(12);
+  const months = lastMonths(n);
+  const cols = months.map((m) => dreMes(db, m));
+  const soma = (k) => round2(cols.reduce((t, c) => t + (c[k] || 0), 0));
+  const tot = { receitaHonorarioBruto: soma("receitaHonorarioBruto"), receitaInstituicoes: soma("receitaInstituicoes"), tacAdventus: soma("tacAdventus"), receitaCredito: soma("receitaCredito"),
+    receitaBruta: soma("receitaBruta"), repasseParceiros: soma("repasseParceiros"), impostos: soma("impostos"), receitaLiquida: soma("receitaLiquida"), comissaoLideres: soma("comissaoLideres"),
+    comissaoConsultores: soma("comissaoConsultores"), despesasFixas: soma("despesasFixas"), despesasVariaveis: soma("despesasVariaveis"), resultadoOperacional: soma("resultadoOperacional") };
+  tot.margemLiquida = tot.receitaBruta > 0 ? (tot.resultadoOperacional / tot.receitaBruta) * 100 : 0;
+  const LINHAS = [
+    { k: "receitaHonorarioBruto", label: "Receita — honorário bruto" },
+    { k: "receitaInstituicoes", label: "Receita — repasse das instituições" },
+    { k: "tacAdventus", label: "Receita — TAC (Adventus)" },
+    { k: "receitaCredito", label: "Receita — crédito próprio" },
+    { k: "receitaBruta", label: "Receita bruta total", forte: true },
+    { k: "repasseParceiros", label: "(–) Repasse a parceiros", neg: true },
+    { k: "impostos", label: "(–) Impostos", neg: true },
+    { k: "receitaLiquida", label: "Receita líquida", forte: true },
+    { k: "comissaoLideres", label: "(–) Comissão de líderes", neg: true },
+    { k: "comissaoConsultores", label: "(–) Comissão + bônus consultores", neg: true },
+    { k: "despesasFixas", label: "(–) Despesas fixas", neg: true },
+    { k: "despesasVariaveis", label: "(–) Despesas variáveis", neg: true },
+    { k: "resultadoOperacional", label: "Resultado operacional", forte: true, cor: true },
+    { k: "margemLiquida", label: "Margem líquida", pct: true },
+  ];
+  const cel = (l, v) => (l.pct ? fmtPct(v) : fmtBRL(l.neg ? -v : v));
+  const exportar = () => baixarCSV("dre-mensal", ["Linha", ...months.map(monthLabel), "Total"],
+    LINHAS.map((l) => [l.label, ...cols.map((c) => round2(l.neg ? -c[l.k] : c[l.k])), round2(l.neg ? -tot[l.k] : tot[l.k])]));
+  return (
+    <div data-testid="dre-colunas">
+      <div className="toolbar-row">
+        <label className="toolbar-field"><span>Meses</span>
+          <Select value={n} onChange={(e) => setN(Number(e.target.value))} data-testid="dre-n"><option value={6}>Últimos 6</option><option value={12}>Últimos 12</option></Select>
+        </label>
+        <BtnExportar onClick={exportar} total={LINHAS.length} testid="dre-exportar" />
+      </div>
+      <div className="matriz-scroll">
+        <table className="matriz dre-tab">
+          <thead><tr><th>Linha</th>{months.map((m) => <th key={m}>{monthLabel(m)}</th>)}<th>Total</th></tr></thead>
+          <tbody>
+            {LINHAS.map((l) => (
+              <tr key={l.k} data-dre={l.k} className={l.forte ? "dre-forte" : ""}>
+                <td className={l.forte ? "strong" : ""}>{l.label}</td>
+                {cols.map((c) => <td key={c.ym} className={`num ${l.cor ? (c[l.k] >= 0 ? "positive" : "negative") : ""}`}>{cel(l, c[l.k])}</td>)}
+                <td className={`num strong ${l.cor ? (tot[l.k] >= 0 ? "positive" : "negative") : ""}`}>{cel(l, tot[l.k])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DREPanel({ db }) {
   const months = lastMonths(12);
   const [ym, setYm] = useState(months[months.length - 1]);
+  const [modo, setModo] = useState("mes");
   const d = dreMes(db, ym);
   const byMonthResultado = {};
   months.forEach((m) => (byMonthResultado[m] = dreMes(db, m).resultadoOperacional));
@@ -4160,14 +4221,24 @@ function DREPanel({ db }) {
     <div>
       <div className="page-header">
         <h2 style={{ fontSize: 16 }}>DRE simplificado</h2>
-        <Select value={ym} onChange={(e) => setYm(e.target.value)}>
-          {months.map((m) => (
-            <option key={m} value={m}>
-              {monthLabel(m)}
-            </option>
-          ))}
-        </Select>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="chip-row" role="group" aria-label="Visão do DRE">
+            <button type="button" className={`chip ${modo === "mes" ? "chip-active" : ""}`} data-dre-modo="mes" onClick={() => setModo("mes")}>Um mês</button>
+            <button type="button" className={`chip ${modo === "colunas" ? "chip-active" : ""}`} data-dre-modo="colunas" onClick={() => setModo("colunas")}>Mês a mês (colunas)</button>
+          </div>
+          {modo === "mes" && (
+            <Select value={ym} onChange={(e) => setYm(e.target.value)}>
+              {months.map((m) => (
+                <option key={m} value={m}>
+                  {monthLabel(m)}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
       </div>
+      {modo === "colunas" && <DREColunas db={db} />}
+      {modo === "mes" && <>
       <p className="panel-note">
         Regime de competência: tudo que pertence ao mês pela <strong>data do crédito</strong> da operação,
         recebido ou não — é a foto de resultado da empresa, comparável mês a mês (mesma base usada nas
@@ -4198,6 +4269,96 @@ function DREPanel({ db }) {
         <h3 className="panel-title">Evolução do resultado operacional (12 meses)</h3>
         <MonthlyChart byMonth={byMonthResultado} />
       </div>
+      </>}
+    </div>
+  );
+}
+
+// Fluxo de caixa projetado: o que ainda vai entrar (Agenda) e sair (despesas a pagar) nos próximos meses
+function ProjecaoPanel({ db }) {
+  const [horizonte, setHorizonte] = useState(6);
+  const [comAtrasados, setComAtrasados] = useState(false);
+  const hoje = todayISO();
+  const curYm = hoje.slice(0, 7);
+  const meses = []; for (let m = curYm, i = 0; i < horizonte; m = nextYm(m), i++) meses.push(m);
+  const abertos = agendaCompleta(db).filter((r) => !r.recebido);
+  const despAbertas = (db.despesas || []).filter((d) => !d.pago);
+  const caixaHoje = round2(saldoInicialMes(db, curYm) + fluxoCaixaMes(db, curYm).saldo);
+  const soma = (arr, f) => round2(arr.reduce((t, x) => t + (Number(f(x)) || 0), 0));
+  const entAtras = abertos.filter((r) => r.dataVencimento < hoje);
+  const saiAtras = despAbertas.filter((d) => d.dataVencimento < hoje);
+  // despesas recorrentes: repete o valor nos meses seguintes se ainda não houver lançamento igual no mês
+  const chaveDesp = (d) => normTxt(d.descricao) + "|" + (d.categoriaId || "");
+  const recorrentes = new Map();
+  (db.despesas || []).filter((d) => d.recorrente).forEach((d) => { const k = chaveDesp(d); if (!recorrentes.has(k) || d.dataVencimento > recorrentes.get(k).dataVencimento) recorrentes.set(k, d); });
+  const colunas = meses.map((ym) => {
+    const ent = abertos.filter((r) => r.dataVencimento >= hoje && monthKey(r.dataVencimento) === ym);
+    const porCat = Object.fromEntries(CATEGORIAS_RECEBIMENTO.map((c) => [c, soma(ent.filter((r) => recebimentoCategoria(r) === c), (r) => r.valor)]));
+    const sai = despAbertas.filter((d) => d.dataVencimento >= hoje && monthKey(d.dataVencimento) === ym);
+    const lancadas = new Set((db.despesas || []).filter((d) => monthKey(d.dataVencimento) === ym).map(chaveDesp));
+    const proj = [...recorrentes.entries()].filter(([k, d]) => monthKey(d.dataVencimento) < ym && !lancadas.has(k));
+    const saidaLanc = soma(sai, (d) => d.valor);
+    const saidaProj = soma(proj, ([, d]) => d.valor);
+    return { ym, porCat, entradas: soma(ent, (r) => r.valor), saidaLanc, saidaProj, saidas: round2(saidaLanc + saidaProj) };
+  });
+  const atrEnt = soma(entAtras, (r) => r.valor);
+  const atrSai = soma(saiAtras, (d) => d.valor);
+  let saldo = round2(caixaHoje + (comAtrasados ? atrEnt - atrSai : 0));
+  const linhas = colunas.map((c) => { const mes = round2(c.entradas - c.saidas); saldo = round2(saldo + mes); return { ...c, mes, acumulado: saldo }; });
+  const negativo = linhas.find((l) => l.acumulado < 0);
+  const totalEnt = soma(linhas, (l) => l.entradas), totalSai = soma(linhas, (l) => l.saidas);
+  const exportar = () => baixarCSV("fluxo-projetado", ["Linha", "Atrasado", ...meses.map(monthLabel)], [
+    ...CATEGORIAS_RECEBIMENTO.map((c) => ["Entrada — " + c, soma(entAtras.filter((r) => recebimentoCategoria(r) === c), (r) => r.valor), ...linhas.map((l) => l.porCat[c])]),
+    ["Total de entradas", atrEnt, ...linhas.map((l) => l.entradas)],
+    ["Saídas — despesas lançadas", atrSai, ...linhas.map((l) => l.saidaLanc)],
+    ["Saídas — recorrentes projetadas", 0, ...linhas.map((l) => l.saidaProj)],
+    ["Saldo do mês", "", ...linhas.map((l) => l.mes)],
+    ["Saldo de caixa acumulado", "", ...linhas.map((l) => l.acumulado)],
+  ]);
+  return (
+    <div data-testid="projecao">
+      <p className="panel-note">
+        Projeção a partir de hoje: <strong>entradas</strong> = recebimentos em aberto da Agenda, no mês de cada vencimento; <strong>saídas</strong> = despesas ainda não pagas
+        mais as recorrentes dos meses seguintes. Parte do saldo de caixa de hoje. Atrasados ficam numa coluna à parte (não se sabe quando entram).
+      </p>
+      <div className="toolbar-row">
+        <label className="toolbar-field"><span>Horizonte</span>
+          <Select value={horizonte} onChange={(e) => setHorizonte(Number(e.target.value))} data-testid="proj-horizonte"><option value={3}>3 meses</option><option value={6}>6 meses</option><option value={12}>12 meses</option></Select>
+        </label>
+        <label className="toolbar-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={comAtrasados} onChange={(e) => setComAtrasados(e.target.checked)} data-testid="proj-atrasados" />
+          <span>Contar os atrasados no saldo inicial</span>
+        </label>
+        <span className="muted toolbar-total">Caixa hoje: <strong data-testid="proj-caixa-hoje">{fmtBRL(caixaHoje)}</strong></span>
+        <BtnExportar onClick={exportar} total={linhas.length} testid="proj-exportar" />
+      </div>
+      {negativo && (
+        <div className="alert-banner" data-testid="proj-alerta"><Bell size={16} /><span>Atenção: o caixa projetado fica negativo em {monthLabel(negativo.ym)} ({fmtBRL(negativo.acumulado)}).</span></div>
+      )}
+      <div className="cards-grid">
+        <div className="stat-card"><span className="stat-label">Entradas previstas</span><span className="stat-value" data-testid="proj-total-ent">{fmtBRL(totalEnt)}</span></div>
+        <div className="stat-card"><span className="stat-label">Saídas previstas</span><span className="stat-value" data-testid="proj-total-sai">{fmtBRL(totalSai)}</span></div>
+        <div className="stat-card stat-card-highlight"><span className="stat-label">Caixa no fim do período</span><span className="stat-value" data-testid="proj-final">{fmtBRL(linhas.length ? linhas[linhas.length - 1].acumulado : caixaHoje)}</span></div>
+      </div>
+      <div className="matriz-scroll">
+        <table className="matriz dre-tab">
+          <thead><tr><th>Linha</th><th>Atrasado</th>{meses.map((m) => <th key={m}>{monthLabel(m)}</th>)}</tr></thead>
+          <tbody>
+            {CATEGORIAS_RECEBIMENTO.map((c) => (
+              <tr key={c} data-proj={"ent-" + c}>
+                <td>Entrada · {c}</td>
+                <td className="num">{fmtBRL(soma(entAtras.filter((r) => recebimentoCategoria(r) === c), (r) => r.valor))}</td>
+                {linhas.map((l) => <td key={l.ym} className="num">{fmtBRL(l.porCat[c])}</td>)}
+              </tr>
+            ))}
+            <tr className="dre-forte" data-proj="entradas"><td className="strong">Total de entradas</td><td className="num strong">{fmtBRL(atrEnt)}</td>{linhas.map((l) => <td key={l.ym} className="num strong positive">{fmtBRL(l.entradas)}</td>)}</tr>
+            <tr data-proj="saidas-lanc"><td>Saídas · despesas lançadas</td><td className="num">{fmtBRL(-atrSai)}</td>{linhas.map((l) => <td key={l.ym} className="num negative">{fmtBRL(-l.saidaLanc)}</td>)}</tr>
+            <tr data-proj="saidas-proj"><td>Saídas · recorrentes projetadas</td><td className="num">—</td>{linhas.map((l) => <td key={l.ym} className="num negative">{fmtBRL(-l.saidaProj)}</td>)}</tr>
+            <tr className="dre-forte" data-proj="mes"><td className="strong">Saldo do mês</td><td></td>{linhas.map((l) => <td key={l.ym} className={`num strong ${l.mes >= 0 ? "positive" : "negative"}`}>{fmtBRL(l.mes)}</td>)}</tr>
+            <tr className="dre-forte" data-proj="acumulado"><td className="strong">Caixa acumulado</td><td></td>{linhas.map((l) => <td key={l.ym} className={`num strong ${l.acumulado >= 0 ? "positive" : "negative"}`}>{fmtBRL(l.acumulado)}</td>)}</tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -4211,13 +4372,14 @@ function FinanceiroPage({ db, mutate, user }) {
     { id: "despesas", label: "Despesas / Contas a pagar", icon: Receipt },
     { id: "categorias", label: "Categorias de despesa", icon: TagIcon },
     { id: "fluxo", label: "Fluxo de caixa", icon: Wallet },
+    { id: "projecao", label: "Fluxo projetado", icon: Wallet },
     { id: "dre", label: "DRE simplificado", icon: Scale },
   ];
   return (
     <div>
       <div className="subtabs">
         {tabs.map((t) => (
-          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} data-tab={t.id} onClick={() => setTab(t.id)}>
             <t.icon size={14} />
             {t.label}
           </button>
@@ -4233,6 +4395,7 @@ function FinanceiroPage({ db, mutate, user }) {
         />
       )}
       {tab === "fluxo" && <FluxoCaixaPanel db={db} mutate={mutate} />}
+      {tab === "projecao" && <ProjecaoPanel db={db} />}
       {tab === "dre" && <DREPanel db={db} />}
     </div>
   );
@@ -4685,6 +4848,77 @@ function ConcentracaoPanel({ db, user }) {
   );
 }
 
+// Rentabilidade por produto: quanto cada produto rende e o que sobra por operação
+function RentabilidadeProdutoPanel({ db, user }) {
+  const [period, setPeriod] = useState("tudo");
+  const [periodoCustom, setPeriodoCustom] = useState({ start: "", end: "" });
+  const bounds = periodRange(period, periodoCustom);
+  const todos = visibleHonorarios(db, user).filter((h) => honorarioAtivo(db, h));
+  const hons = bounds ? todos.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : todos;
+  const mapa = new Map();
+  hons.forEach((h) => {
+    const nome = String(h.modalidade || "").trim() || SEM_PRODUTO;
+    const k = normTxt(nome);
+    const g = mapa.get(k) || { nome, qtd: 0, liberado: 0, bruto: 0, parceiro: 0, imposto: 0, liquido: 0 };
+    g.qtd += 1;
+    g.liberado += Number(h.valorLiberado) || 0;
+    g.bruto += Number(h.valorHonorario) || 0;
+    g.parceiro += Number(h.valorParceiro) || 0;
+    g.imposto += Number(h.imposto) || 0;
+    g.liquido += honorarioLiquido(h);
+    mapa.set(k, g);
+  });
+  const lista = [...mapa.values()].sort((a, b) => b.liquido - a.liquido);
+  const totLiq = lista.reduce((t, g) => t + g.liquido, 0);
+  const totQtd = lista.reduce((t, g) => t + g.qtd, 0);
+  const pc = (a, b) => (b > 0 ? (a / b) * 100 : 0);
+  const melhor = [...lista].filter((g) => g.liberado > 0).sort((a, b) => pc(b.liquido, b.liberado) - pc(a.liquido, a.liberado))[0];
+  const exportar = () => baixarCSV("rentabilidade-produto", ["Produto", "Operações", "Valor liberado", "Honorário bruto", "(–) Parceiros", "(–) Impostos", "Honorário líquido", "Líquido por operação", "Líquido ÷ liberado (%)", "% do resultado"],
+    lista.map((g) => [g.nome, g.qtd, g.liberado, g.bruto, g.parceiro, g.imposto, g.liquido, g.qtd ? g.liquido / g.qtd : 0, round2(pc(g.liquido, g.liberado)), round2(pc(g.liquido, totLiq))]));
+  return (
+    <div data-testid="rentabilidade">
+      <div className="page-header">
+        <div>
+          <h2 style={{ fontSize: 16 }}>Rentabilidade por produto</h2>
+          <p className="muted">Quanto cada produto deixa de líquido (honorário − parceiros − impostos), por operação e em relação ao valor liberado. Operações canceladas ficam de fora.</p>
+        </div>
+        <PeriodSelect period={period} setPeriod={setPeriod} custom={periodoCustom} setCustom={setPeriodoCustom} />
+      </div>
+      {lista.length === 0 ? <EmptyState text="Nenhum honorário no período." /> : (
+        <>
+          <div className="cards-grid">
+            <div className="stat-card"><span className="stat-label">Produtos ativos</span><span className="stat-value">{lista.length}</span></div>
+            <div className="stat-card"><span className="stat-label">Líquido por operação (geral)</span><span className="stat-value" data-testid="rent-ticket">{fmtBRL(totQtd ? totLiq / totQtd : 0)}</span></div>
+            <div className="stat-card stat-card-highlight"><span className="stat-label">Mais rentável (líquido ÷ liberado)</span><span className="stat-value" data-testid="rent-melhor">{melhor ? `${melhor.nome} · ${fmtPct(pc(melhor.liquido, melhor.liberado))}` : "—"}</span></div>
+          </div>
+          <div className="toolbar-row"><span className="muted toolbar-total">Líquido total: <strong>{fmtBRL(totLiq)}</strong></span><BtnExportar onClick={exportar} total={lista.length} testid="rent-exportar" /></div>
+          <div className="table-scroll">
+            <table className="table">
+              <thead><tr><th>Produto</th><th>Operações</th><th>Valor liberado</th><th>Honorário bruto</th><th>(–) Parceiros</th><th>(–) Impostos</th><th>Líquido</th><th>Líquido / operação</th><th>Líquido ÷ liberado</th><th>% do resultado</th></tr></thead>
+              <tbody>
+                {lista.map((g) => (
+                  <tr key={g.nome} data-rent={g.nome}>
+                    <td><ProdutoTag nome={g.nome} /></td>
+                    <td className="num">{g.qtd}</td>
+                    <td className="num">{fmtBRL(g.liberado)}</td>
+                    <td className="num">{fmtBRL(g.bruto)}</td>
+                    <td className="num negative">{fmtBRL(-g.parceiro)}</td>
+                    <td className="num negative">{fmtBRL(-g.imposto)}</td>
+                    <td className="num strong">{fmtBRL(g.liquido)}</td>
+                    <td className="num">{fmtBRL(g.qtd ? g.liquido / g.qtd : 0)}</td>
+                    <td className="num">{g.liberado > 0 ? fmtPct(pc(g.liquido, g.liberado)) : "—"}</td>
+                    <td className="num">{fmtPct(pc(g.liquido, totLiq))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RelatoriosPage({ db, user }) {
   const [tab, setTab] = useState("clientes");
   const tabs = [
@@ -4692,6 +4926,7 @@ function RelatoriosPage({ db, user }) {
     { id: "parceiros", label: "Parceiros", icon: Handshake },
     { id: "instituicoes", label: "Instituições financeiras", icon: Landmark },
     { id: "concentracao", label: "Concentração", icon: Percent },
+    { id: "rentabilidade", label: "Rentabilidade por produto", icon: Scale },
   ];
   return (
     <div>
@@ -4707,6 +4942,7 @@ function RelatoriosPage({ db, user }) {
       {tab === "parceiros" && <ParceirosRankingPanel db={db} user={user} />}
       {tab === "instituicoes" && <InstituicoesRankingPanel db={db} user={user} />}
       {tab === "concentracao" && <ConcentracaoPanel db={db} user={user} />}
+      {tab === "rentabilidade" && <RentabilidadeProdutoPanel db={db} user={user} />}
     </div>
   );
 }
@@ -5651,7 +5887,7 @@ function Dashboard({ db, user }) {
   const opNumber = (id) => db.operations.find((o) => o.id === id)?.numero || "—";
 
   const bounds = periodRange(period, periodoCustom);
-  const honorariosAll = visibleHonorarios(db, user);
+  const honorariosAll = visibleHonorarios(db, user).filter((h) => honorarioAtivo(db, h));
   const honorarios = bounds ? honorariosAll.filter((h) => h.dataCredito >= bounds.start && h.dataCredito <= bounds.end) : honorariosAll;
   const rows = useMemo(() => honorarios.map((h) => ({ ...h, ...computeHonorario(h) })), [honorarios]);
 
@@ -10041,6 +10277,16 @@ export function AppStyles() {
 .busca-item span { color:var(--text-muted); font-size:12.5px; min-width:0; overflow-wrap:anywhere; }
 .busca-mais { background:none; border:0; color:var(--brass-dark); font-weight:600; padding:6px 8px; cursor:pointer; font-size:12.5px; }
 .busca-vazio { padding:12px; color:var(--text-muted); }
+.matriz-scroll { overflow-x:auto; border:1px solid var(--line); border-radius:16px; background:var(--panel); margin-bottom:16px; }
+.matriz { width:100%; border-collapse:collapse; font-size:12.5px; }
+.matriz th { text-align:right; font-size:11px; letter-spacing:.03em; text-transform:uppercase; color:var(--text-muted); padding:10px 12px; border-bottom:1px solid var(--line); }
+.matriz th:first-child { text-align:left; }
+.matriz td { padding:8px 12px; border-bottom:1px solid var(--line); }
+.matriz td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.dre-tab th, .dre-tab td { white-space:nowrap; }
+.dre-tab td:first-child, .dre-tab th:first-child { position:sticky; left:0; background:var(--panel); z-index:1; }
+.dre-tab tr.dre-forte td { background:var(--paper); }
+.dre-tab tr.dre-forte td:first-child { background:var(--paper); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
