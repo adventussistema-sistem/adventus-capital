@@ -231,6 +231,26 @@ const FAIXAS_ATRASO = [
   { de: 61, ate: 90, label: "61–90 dias" },
   { de: 91, ate: Infinity, label: "90+ dias" },
 ];
+// ---- status da operação (esteira): Em análise → Aprovada → Paga → Em cobrança → Liquidada / Cancelada ----
+const STATUS_OPERACAO = [
+  { id: "analise", label: "Em análise", tone: "blue" },
+  { id: "aprovada", label: "Aprovada", tone: "teal" },
+  { id: "paga", label: "Paga", tone: "positive" },
+  { id: "cobranca", label: "Em cobrança", tone: "rose" },
+  { id: "liquidada", label: "Liquidada", tone: "plum" },
+  { id: "cancelada", label: "Cancelada", tone: null },
+];
+// operações antigas (sem status gravado) recebem um status coerente com o que já foi marcado
+function opStatus(o) {
+  if (o?.status && STATUS_OPERACAO.some((x) => x.id === o.status)) return o.status;
+  if (o?.creditoProprio) {
+    const ps = o.recebiveis || [];
+    return ps.length && ps.every((p) => p.pago) ? "liquidada" : "aprovada";
+  }
+  return o?.recebidoBanco ? "paga" : "aprovada";
+}
+const opStatusInfo = (o) => STATUS_OPERACAO.find((x) => x.id === opStatus(o));
+
 // ---- listas: exportar CSV, filtros recolhíveis e paginação (usados em várias telas) ----
 // CSV para Excel pt-BR: separador ";", vírgula decimal e BOM (acentos corretos)
 function baixarCSV(nomeArquivo, cabecalho, linhas) {
@@ -1961,6 +1981,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
   const [form, setForm] = useState(() => ({
     // Operação
     numero: editingOp?.numero || proximoNumeroOperacao(db),
+    status: editingOp ? opStatus(editingOp) : "analise",
     instituicaoId: editingOp?.instituicaoId || "",
     clienteId: editingOp?.clienteId || editingHon?.clienteId || "",
     valorAprovado: editingOp?.valorAprovado ?? "",
@@ -2110,6 +2131,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         onSave({
           operacao: {
             numero: form.numero,
+            status: form.status,
             instituicaoId: form.instituicaoId,
             clienteId: form.clienteId,
             valorAprovado: Number(form.valorAprovado) || 0,
@@ -2152,6 +2174,11 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
       <h3 className="panel-title" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>Dados da operação</h3>
       <Field label="Número da operação" hint={editingOp ? null : "Gerado automaticamente — pode ajustar se precisar"}>
         <TextInput value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} required data-f="numero" />
+      </Field>
+      <Field label="Status da operação" hint="Em qual etapa está. Cancelada some da Agenda de recebimentos">
+        <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} data-f="status">
+          {STATUS_OPERACAO.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+        </Select>
       </Field>
       <Field label="Produto · Modalidade (tipo de operação)" hint="Escolha na lista — vira a tag e o filtro da lista de Operações">
         <Select value={form.modalidade} onChange={(e) => setForm({ ...form, modalidade: e.target.value })} data-f="produto">
@@ -2523,6 +2550,7 @@ function OperacoesPage({ db, mutate, user }) {
   const [search, setSearch] = useState("");
   const [produtoFiltro, setProdutoFiltro] = useState("todos");
   const [ordem, setOrdem] = useState("recentes");
+  const [statusFiltro, setStatusFiltro] = useState("todos");
   const [aviso, setAviso] = useState("");
   const institutionName = (id) => db.institutions.find((b) => b.id === id)?.nome || "—";
   const clientName = (id) => db.clients.find((c) => c.id === id)?.nome || "—";
@@ -2559,7 +2587,8 @@ function OperacoesPage({ db, mutate, user }) {
   const editingHon = editingId ? db.honorarios.find((h) => h.operacaoId === editingId) : null;
 
   const term = search.trim().toLowerCase();
-  const porProduto = produtoFiltro === "todos" ? visibleOps : visibleOps.filter((o) => normTxt(opProduto(db, o)) === normTxt(produtoFiltro));
+  const porProduto0 = produtoFiltro === "todos" ? visibleOps : visibleOps.filter((o) => normTxt(opProduto(db, o)) === normTxt(produtoFiltro));
+  const porProduto = statusFiltro === "todos" ? porProduto0 : porProduto0.filter((o) => opStatus(o) === statusFiltro);
   const buscadas = term
     ? porProduto.filter((o) => `${o.numero} ${institutionName(o.instituicaoId)} ${clientName(o.clienteId)} ${opProduto(db, o)}`.toLowerCase().includes(term))
     : porProduto;
@@ -2574,15 +2603,15 @@ function OperacoesPage({ db, mutate, user }) {
     else arr.sort(lanc);
     return arr;
   }, [buscadas, ordem, db]);
-  const pgOps = usePagina(filteredOperations, `${search}|${produtoFiltro}|${ordem}`);
+  const pgOps = usePagina(filteredOperations, `${search}|${produtoFiltro}|${ordem}|${statusFiltro}`);
   const exportarOps = () =>
-    baixarCSV("operacoes", ["Nº operação", "Produto", "Instituição", "Cliente", "Data crédito", "Banco a receber", "Recebido", "Honorário líquido", "Colaborador", "Comissão líder", "TAC"],
+    baixarCSV("operacoes", ["Nº operação", "Status", "Produto", "Instituição", "Cliente", "Data crédito", "Banco a receber", "Recebido", "Honorário líquido", "Colaborador", "Comissão líder", "TAC"],
       filteredOperations.map((o) => {
         const hon = db.honorarios.find((h) => h.operacaoId === o.id);
         const c = hon ? computeHonorario(hon) : null;
         const ps = o.recebiveis || [];
         const recebido = o.creditoProprio ? (ps.length && ps.every((p) => p.pago) ? "Recebido" : ps.length ? `${ps.filter((p) => p.pago).length}/${ps.length} pagas` : "Sem parcelas") : o.recebidoBanco ? "Recebido" : "A receber";
-        return [o.numero, opProduto(db, o), institutionName(o.instituicaoId), clientName(o.clienteId), hon?.dataCredito ? fmtDateBR(hon.dataCredito) : "",
+        return [o.numero, opStatusInfo(o).label, opProduto(db, o), institutionName(o.instituicaoId), clientName(o.clienteId), hon?.dataCredito ? fmtDateBR(hon.dataCredito) : "",
           o.creditoProprio ? Number(o.valorTotalCliente) || 0 : Number(o.valorAReceber) || 0, recebido,
           c && !o.creditoProprio ? c.liquido : "", hon ? collabName(hon.colaboradorId) : "", c && hon?.liderId ? c.comissaoLider : "", o.tacAtivo ? Number(o.tacValorGeral) || 0 : ""];
       }));
@@ -2618,7 +2647,7 @@ function OperacoesPage({ db, mutate, user }) {
           </Select>
           <BtnExportar onClick={exportarOps} total={filteredOperations.length} testid="operacoes-exportar" />
           <div style={{ flexBasis: "100%" }}>
-          <FiltrosRecolhiveis testid="operacoes-filtros" ativos={produtoFiltro !== "todos" ? 1 : 0}>
+          <FiltrosRecolhiveis testid="operacoes-filtros" ativos={(produtoFiltro !== "todos" ? 1 : 0) + (statusFiltro !== "todos" ? 1 : 0)}>
           <div className="chip-row" data-testid="filtro-produto" role="group" aria-label="Filtrar por produto" style={{ flexBasis: "100%" }}>
             <button type="button" className={`chip ${produtoFiltro === "todos" ? "chip-active" : ""}`} data-produto="todos" onClick={() => setProdutoFiltro("todos")}>
               Todos <b>{visibleOps.length}</b>
@@ -2626,6 +2655,14 @@ function OperacoesPage({ db, mutate, user }) {
             {produtosVisiveis.map((p) => (
               <button type="button" key={p} className={`chip ${normTxt(produtoFiltro) === normTxt(p) ? "chip-active" : ""}`} data-produto={p} onClick={() => setProdutoFiltro(p)}>
                 {p} <b>{contagemProdutos[normTxt(p)] || 0}</b>
+              </button>
+            ))}
+          </div>
+          <div className="chip-row" data-testid="filtro-status" role="group" aria-label="Filtrar por status" style={{ marginTop: 8 }}>
+            <button type="button" className={`chip ${statusFiltro === "todos" ? "chip-active" : ""}`} data-status="todos" onClick={() => setStatusFiltro("todos")}>Todos os status</button>
+            {STATUS_OPERACAO.map((x) => (
+              <button type="button" key={x.id} className={`chip ${statusFiltro === x.id ? "chip-active" : ""}`} data-status={x.id} onClick={() => setStatusFiltro(x.id)}>
+                {x.label} <b>{porProduto0.filter((o) => opStatus(o) === x.id).length}</b>
               </button>
             ))}
           </div>
@@ -2644,6 +2681,7 @@ function OperacoesPage({ db, mutate, user }) {
             <thead>
               <tr>
                 <th>Nº operação</th>
+                <th>Status</th>
                 <th>Produto</th>
                 <th>Instituição</th>
                 <th>Cliente</th>
@@ -2664,6 +2702,12 @@ function OperacoesPage({ db, mutate, user }) {
                 return (
                   <tr key={o.id}>
                     <td>{o.numero}</td>
+                    <td>
+                      <select className={`status-sel st-${opStatus(o)}`} value={opStatus(o)} aria-label={`Status da operação ${o.numero}`} data-testid="status-op"
+                        onChange={(e) => mutate((d) => ({ ...d, operations: d.operations.map((x) => (x.id === o.id ? { ...x, status: e.target.value } : x)) }))}>
+                        {STATUS_OPERACAO.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+                      </select>
+                    </td>
                     <td><ProdutoTag nome={opProduto(db, o)} /></td>
                     <td>{institutionName(o.instituicaoId)}</td>
                     <td>{clientName(o.clienteId)}</td>
@@ -3070,7 +3114,10 @@ function agendaAutomatica(db) {
   const bancoManual = new Set(manuais.filter((r) => r.tipo === "banco").map((r) => r.refId));
   const clienteManual = new Set(manuais.filter((r) => r.tipo === "cliente").map((r) => r.refId));
   const out = [];
+  // operação cancelada não gera cobrança: sai da Agenda (o histórico fica na operação)
+  const canceladas = new Set((db.operations || []).filter((o) => opStatus(o) === "cancelada").map((o) => o.id));
   (db.operations || []).forEach((o) => {
+    if (canceladas.has(o.id)) return;
     const valor = Number(o.valorAReceber) || 0;
     if (!o.dataRecebimentoBanco || valor <= 0 || bancoManual.has(o.id)) return;
     out.push({
@@ -3081,6 +3128,7 @@ function agendaAutomatica(db) {
     });
   });
   (db.honorarios || []).forEach((h) => {
+    if (canceladas.has(h.operacaoId)) return;
     const valor = Number(h.valorHonorario) || 0;
     const psHon = h.formaPagamentoHon === "parcelado" ? h.recebiveisHon || [] : [];
     if (valor > 0 && psHon.length && !clienteManual.has(h.id)) {
@@ -3103,7 +3151,7 @@ function agendaAutomatica(db) {
   });
   // TAC (parte Adventus): um recebimento por operação com TAC
   (db.operations || []).forEach((o) => {
-    if (!o.tacAtivo) return;
+    if (!o.tacAtivo || canceladas.has(o.id)) return;
     const valor = round2(((Number(o.tacValorGeral) || 0) * (Number(o.tacPctAdventus) || 0)) / 100);
     const venc = o.dataRecebimentoBanco || opDataCredito(db, o);
     if (valor <= 0 || !venc) return;
@@ -3126,6 +3174,7 @@ function agendaAutomatica(db) {
   );
   // crédito próprio: uma linha por parcela que o cliente vai pagar
   opsCreditoProprio(db).forEach((o) => {
+    if (canceladas.has(o.id)) return;
     const ps = o.recebiveis || [];
     ps.forEach((p) => {
       if (!p.vencimento || !(Number(p.valor) > 0)) return;
@@ -9765,6 +9814,13 @@ export function AppStyles() {
 .filtros-corpo { margin-top:6px; }
 .paginacao { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; font-size:13px; }
 .pag-ctrl { display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.status-sel { appearance:none; -webkit-appearance:none; border:1px solid var(--line); border-radius:99px; padding:3px 10px; font-size:12px; font-weight:600; cursor:pointer; background:#fff; color:var(--text); max-width:130px; }
+.status-sel.st-analise { background:#E8F0FA; color:#2F5C8F; border-color:#C9DBF0; }
+.status-sel.st-aprovada { background:#E4F4F1; color:#1F6F66; border-color:#BFE3DD; }
+.status-sel.st-paga { background:#E6F4EA; color:#2E6B43; border-color:#C2E3CC; }
+.status-sel.st-cobranca { background:#FCE9E6; color:#B4483A; border-color:#F3C6BF; }
+.status-sel.st-liquidada { background:#F1EAF8; color:#6A4A8C; border-color:#DACBEC; }
+.status-sel.st-cancelada { background:#EEE; color:#777; border-color:#DDD; text-decoration:line-through; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
