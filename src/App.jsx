@@ -177,7 +177,11 @@ const DEFAULT_PREMIOS_ROLETA = () => [
 const fmtBRL = (v) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v) || 0);
 const fmtPct = (v) => `${(Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// data de hoje no fuso do usuário (toISOString usaria UTC e viraria o dia às 21h no Brasil)
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 const monthKey = (iso) => (iso ? iso.slice(0, 7) : null);
 const monthLabel = (ym) => {
   if (!ym) return "—";
@@ -227,6 +231,80 @@ const FAIXAS_ATRASO = [
   { de: 61, ate: 90, label: "61–90 dias" },
   { de: 91, ate: Infinity, label: "90+ dias" },
 ];
+// ---- listas: exportar CSV, filtros recolhíveis e paginação (usados em várias telas) ----
+// CSV para Excel pt-BR: separador ";", vírgula decimal e BOM (acentos corretos)
+function baixarCSV(nomeArquivo, cabecalho, linhas) {
+  const cel = (v) => {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "number") return round2(v).toFixed(2).replace(".", ",");
+    const t = String(v).replace(/\r?\n/g, " ");
+    return /[";]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const texto = [cabecalho, ...linhas].map((l) => l.map(cel).join(";")).join("\r\n");
+  const blob = new Blob(["\uFEFF" + texto], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${nomeArquivo}-${todayISO()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function BtnExportar({ onClick, total, testid = "exportar-csv" }) {
+  return (
+    <button type="button" className="btn btn-ghost btn-sm" data-testid={testid} disabled={!total} onClick={onClick} title="Baixa a lista filtrada, aberta no Excel">
+      Exportar CSV{total ? ` (${total})` : ""}
+    </button>
+  );
+}
+
+// bloco de filtros que o usuário recolhe/expande; mostra quantos filtros estão ativos
+function FiltrosRecolhiveis({ ativos = 0, children, testid = "filtros" }) {
+  const [aberto, setAberto] = useState(true);
+  return (
+    <div className="filtros-rec" data-testid={testid}>
+      <button type="button" className="filtros-toggle" aria-expanded={aberto} data-testid={testid + "-toggle"} onClick={() => setAberto(!aberto)}>
+        <span>{aberto ? "▾" : "▸"} Filtros</span>
+        {ativos > 0 && <b className="filtros-badge">{ativos} {ativos === 1 ? "ativo" : "ativos"}</b>}
+      </button>
+      {aberto && <div className="filtros-corpo">{children}</div>}
+    </div>
+  );
+}
+
+// paginação: devolve a fatia da página e os controles; volta à página 1 quando o filtro muda
+function usePagina(itens, chaveReset, tamInicial = 25) {
+  const [pagina, setPagina] = useState(1);
+  const [tam, setTam] = useState(tamInicial);
+  useEffect(() => { setPagina(1); }, [chaveReset, tam]);
+  const paginas = Math.max(1, Math.ceil(itens.length / tam));
+  const atual = Math.min(pagina, paginas);
+  const fatia = itens.slice((atual - 1) * tam, atual * tam);
+  return { fatia, atual, paginas, tam, setPagina, setTam, total: itens.length };
+}
+function Paginacao({ pg, testid = "paginacao" }) {
+  if (pg.total <= 10) return null;
+  const de = (pg.atual - 1) * pg.tam + 1;
+  const ate = Math.min(pg.total, pg.atual * pg.tam);
+  return (
+    <div className="paginacao no-print" data-testid={testid}>
+      <span className="muted">Mostrando {de}–{ate} de {pg.total}</span>
+      <span className="pag-ctrl">
+        <label className="muted">Por página{" "}
+          <select className="input" value={pg.tam} onChange={(e) => pg.setTam(Number(e.target.value))} data-testid={testid + "-tam"} style={{ width: "auto", padding: "4px 8px" }}>
+            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={pg.atual <= 1} data-testid={testid + "-ant"} onClick={() => pg.setPagina(pg.atual - 1)}>‹ Anterior</button>
+        <span>{pg.atual} / {pg.paginas}</span>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={pg.atual >= pg.paginas} data-testid={testid + "-prox"} onClick={() => pg.setPagina(pg.atual + 1)}>Próxima ›</button>
+      </span>
+    </div>
+  );
+}
+
 // Carteira a receber: quanto está vencido, vence hoje, nos próximos 7 dias e depois — a soma sempre fecha com o total
 function CarteiraComposicao({ itens, ativo, onPick, testid = "carteira-composicao" }) {
   const abertos = itens.filter((r) => !r.recebido);
@@ -2496,6 +2574,18 @@ function OperacoesPage({ db, mutate, user }) {
     else arr.sort(lanc);
     return arr;
   }, [buscadas, ordem, db]);
+  const pgOps = usePagina(filteredOperations, `${search}|${produtoFiltro}|${ordem}`);
+  const exportarOps = () =>
+    baixarCSV("operacoes", ["Nº operação", "Produto", "Instituição", "Cliente", "Data crédito", "Banco a receber", "Recebido", "Honorário líquido", "Colaborador", "Comissão líder", "TAC"],
+      filteredOperations.map((o) => {
+        const hon = db.honorarios.find((h) => h.operacaoId === o.id);
+        const c = hon ? computeHonorario(hon) : null;
+        const ps = o.recebiveis || [];
+        const recebido = o.creditoProprio ? (ps.length && ps.every((p) => p.pago) ? "Recebido" : ps.length ? `${ps.filter((p) => p.pago).length}/${ps.length} pagas` : "Sem parcelas") : o.recebidoBanco ? "Recebido" : "A receber";
+        return [o.numero, opProduto(db, o), institutionName(o.instituicaoId), clientName(o.clienteId), hon?.dataCredito ? fmtDateBR(hon.dataCredito) : "",
+          o.creditoProprio ? Number(o.valorTotalCliente) || 0 : Number(o.valorAReceber) || 0, recebido,
+          c && !o.creditoProprio ? c.liquido : "", hon ? collabName(hon.colaboradorId) : "", c && hon?.liderId ? c.comissaoLider : "", o.tacAtivo ? Number(o.tacValorGeral) || 0 : ""];
+      }));
   const contagemProdutos = visibleOps.reduce((acc, o) => {
     const k = normTxt(opProduto(db, o));
     acc[k] = (acc[k] || 0) + 1;
@@ -2526,6 +2616,9 @@ function OperacoesPage({ db, mutate, user }) {
             <option value="numero">Nº da operação (maior → menor)</option>
             <option value="antigas">Mais antigas primeiro</option>
           </Select>
+          <BtnExportar onClick={exportarOps} total={filteredOperations.length} testid="operacoes-exportar" />
+          <div style={{ flexBasis: "100%" }}>
+          <FiltrosRecolhiveis testid="operacoes-filtros" ativos={produtoFiltro !== "todos" ? 1 : 0}>
           <div className="chip-row" data-testid="filtro-produto" role="group" aria-label="Filtrar por produto" style={{ flexBasis: "100%" }}>
             <button type="button" className={`chip ${produtoFiltro === "todos" ? "chip-active" : ""}`} data-produto="todos" onClick={() => setProdutoFiltro("todos")}>
               Todos <b>{visibleOps.length}</b>
@@ -2535,6 +2628,8 @@ function OperacoesPage({ db, mutate, user }) {
                 {p} <b>{contagemProdutos[normTxt(p)] || 0}</b>
               </button>
             ))}
+          </div>
+          </FiltrosRecolhiveis>
           </div>
         </div>
       )}
@@ -2563,7 +2658,7 @@ function OperacoesPage({ db, mutate, user }) {
               </tr>
             </thead>
             <tbody>
-              {filteredOperations.map((o) => {
+              {pgOps.fatia.map((o) => {
                 const hon = db.honorarios.find((h) => h.operacaoId === o.id);
                 const c = hon ? computeHonorario(hon) : null;
                 return (
@@ -2620,6 +2715,7 @@ function OperacoesPage({ db, mutate, user }) {
           </table>
         </div>
       )}
+      <Paginacao pg={pgOps} testid="operacoes-pag" />
     </div>
   );
 }
@@ -3199,11 +3295,15 @@ function AgendaPage({ db, mutate, user }) {
   // "Todos" mostra só o que ainda está em aberto; o que já foi recebido fica na aba "Recebidos"
   const filtered = filter === "todos" ? porProduto.filter((r) => !r.recebido) : porProduto.filter((r) => r.status === filter);
   const totalFiltrado = filtered.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const pg = usePagina(filtered, `${filter}|${produtoFiltro}|${categoriaFiltro}|${agrupar}`);
   const chaveGrupo = (r) => (agrupar === "categoria" ? r.categoria : r.produto);
+  const exportarAgenda = () =>
+    baixarCSV("agenda-recebimentos", ["Vencimento", "Produto", "Categoria", "Referência", "Descrição", "Valor", "Status"],
+      filtered.map((r) => [fmtDateBR(r.dataVencimento), r.produto, r.categoria, refLabel(r), r.descricao || "", Number(r.valor) || 0, STATUS_LABEL[r.status]]));
   const grupos = agrupar !== "nenhum"
-    ? [...filtered.reduce((m, r) => { const k = normTxt(chaveGrupo(r)); if (!m.has(k)) m.set(k, { nome: chaveGrupo(r), itens: [] }); m.get(k).itens.push(r); return m; }, new Map()).values()]
+    ? [...pg.fatia.reduce((m, r) => { const k = normTxt(chaveGrupo(r)); if (!m.has(k)) m.set(k, { nome: chaveGrupo(r), itens: [] }); m.get(k).itens.push(r); return m; }, new Map()).values()]
         .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"))
-    : [{ nome: null, itens: filtered }];
+    : [{ nome: null, itens: pg.fatia }];
 
   const save = (data) => {
     mutate((d) => {
@@ -3263,6 +3363,7 @@ function AgendaPage({ db, mutate, user }) {
         ))}
       </div>
 
+      <FiltrosRecolhiveis testid="agenda-filtros" ativos={(produtoFiltro !== "todos" ? 1 : 0) + (categoriaFiltro !== "todas" ? 1 : 0)}>
       <div className="toolbar-row" data-testid="agenda-toolbar">
         <label className="toolbar-field">
           <span>Produto</span>
@@ -3290,7 +3391,9 @@ function AgendaPage({ db, mutate, user }) {
           {filter === "recebido" ? "Total recebido" : "Total a receber"}: <strong>{fmtBRL(totalFiltrado)}</strong>
           {filter === "todos" && counts.recebido ? <> · {counts.recebido} já recebido(s) ocultos — veja em "Recebidos"</> : null}
         </span>
+        <BtnExportar onClick={exportarAgenda} total={filtered.length} testid="agenda-exportar" />
       </div>
+      </FiltrosRecolhiveis>
 
       {filtered.length === 0 ? (
         <EmptyState text={filter === "todos" ? "Nada em aberto nesse filtro. Os já recebidos estão na aba \"Recebidos\"." : "Nenhum recebimento nesse filtro."} />
@@ -3371,6 +3474,7 @@ function AgendaPage({ db, mutate, user }) {
         </table>
         </div>
       )}
+      <Paginacao pg={pg} testid="agenda-pag" />
     </div>
   );
 }
@@ -9655,6 +9759,12 @@ export function AppStyles() {
 .rk-bar i { display:block; height:100%; background:#B4483A; border-radius:99px; }
 .rk-valor { text-align:right; display:flex; flex-direction:column; font-weight:700; white-space:nowrap; }
 @media (max-width:700px){ .ranking-list li { grid-template-columns: 28px minmax(0,1fr) auto; } .rk-bar { display:none; } }
+.filtros-rec { margin-bottom: 12px; }
+.filtros-toggle { display:inline-flex; align-items:center; gap:8px; background:none; border:0; padding:4px 0; cursor:pointer; font-weight:600; color:var(--text); font-size:13px; }
+.filtros-badge { background:var(--ink); color:#fff; border-radius:99px; padding:1px 8px; font-size:11px; }
+.filtros-corpo { margin-top:6px; }
+.paginacao { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; font-size:13px; }
+.pag-ctrl { display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
