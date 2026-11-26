@@ -231,6 +231,118 @@ const FAIXAS_ATRASO = [
   { de: 61, ate: 90, label: "61–90 dias" },
   { de: 91, ate: Infinity, label: "90+ dias" },
 ];
+// ---- seletor de cliente com busca por nome, CNPJ/CPF ou telefone ----
+function ClienteSelect({ clients, value, onChange, required, vazio = "Selecione", ...rest }) {
+  const [busca, setBusca] = useState("");
+  const t = normTxt(busca);
+  const d = soDigitos(busca);
+  const casa = (c) => !t || normTxt(c.nome).includes(t) || (d && (soDigitos(c.documento).includes(d) || soDigitos(c.telefone).includes(d)));
+  const lista = clients.filter((c) => c.id === value || casa(c));
+  const achados = clients.filter(casa).length;
+  return (
+    <div className="cli-select">
+      {clients.length > 6 && (
+        <input className="input" type="search" placeholder="Digite o nome ou CNPJ/CPF para achar o cliente…" value={busca} onChange={(e) => setBusca(e.target.value)} data-testid="cliente-busca" aria-label="Buscar cliente" />
+      )}
+      <Select value={value} onChange={onChange} required={required} {...rest}>
+        <option value="">{vazio}</option>
+        {lista.map((c) => (
+          <option key={c.id} value={c.id}>{c.nome}{c.documento ? ` · ${c.documento}` : ""}</option>
+        ))}
+      </Select>
+      {busca && <small className="muted">{achados === 0 ? "Nenhum cliente encontrado." : `${achados} cliente(s) encontrado(s).`}</small>}
+    </div>
+  );
+}
+
+// ---- busca global (topo de todas as telas): operações, clientes e recebimentos ----
+function BuscaGlobal({ db, user, onGo }) {
+  const [termo, setTermo] = useState("");
+  const [aberto, setAberto] = useState(false);
+  const ref = useRef(null);
+  const inputRef = useRef(null);
+  useEffect(() => {
+    const tecla = (e) => {
+      if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || ""))) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    const fora = (e) => { if (ref.current && !ref.current.contains(e.target)) setAberto(false); };
+    document.addEventListener("keydown", tecla);
+    document.addEventListener("mousedown", fora);
+    return () => { document.removeEventListener("keydown", tecla); document.removeEventListener("mousedown", fora); };
+  }, []);
+  const t = normTxt(termo);
+  // busca por CNPJ/CPF/telefone só quando o que foi digitado é número (senão "OP-0001" casaria com o fim de um CNPJ)
+  const d = /^[\d.\-/()\s]+$/.test(termo.trim()) ? soDigitos(termo) : "";
+  const res = useMemo(() => {
+    if (t.length < 2 && d.length < 3) return null;
+    const cli = (id) => (db.clients || []).find((c) => c.id === id);
+    const inst = (id) => (db.institutions || []).find((b) => b.id === id);
+    const honVis = new Set(visibleHonorarios(db, user).map((h) => h.operacaoId));
+    const ops = user.papel === "diretora" ? db.operations : db.operations.filter((o) => honVis.has(o.id) || !db.honorarios.some((h) => h.operacaoId === o.id));
+    const operacoes = ops
+      .filter((o) => normTxt(`${o.numero} ${cli(o.clienteId)?.nome || ""} ${inst(o.instituicaoId)?.nome || ""} ${opProduto(db, o)}`).includes(t) || (d && soDigitos(cli(o.clienteId)?.documento).includes(d)))
+      .sort((a, b) => (b.criadoEm || 0) - (a.criadoEm || 0));
+    const idsCli = new Set(ops.map((o) => o.clienteId));
+    const clientes = (db.clients || []).filter((c) => (user.papel === "diretora" || idsCli.has(c.id)) &&
+      (normTxt(c.nome).includes(t) || (d && (soDigitos(c.documento).includes(d) || soDigitos(c.telefone).includes(d)))));
+    const hIds = new Set(visibleHonorarios(db, user).map((h) => h.id));
+    const receb = agendaCompleta(db).filter((r) => !r.recebido && recebimentoVisivel(db, r, hIds, user) && normTxt(`${recebimentoRef(db, r)} ${recebimentoDevedor(db, r).nome} ${r.descricao || ""}`).includes(t))
+      .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
+    return { operacoes, clientes, receb };
+  }, [t, d, db, user]);
+  const vazio = res && !res.operacoes.length && !res.clientes.length && !res.receb.length;
+  const ir = (pagina, busca) => { setAberto(false); setTermo(""); onGo(pagina, busca); };
+  const LIM = 5;
+  return (
+    <div className="busca-global no-print" ref={ref}>
+      <Search size={15} />
+      <input ref={inputRef} className="input" type="search" placeholder="Buscar operação, cliente, CNPJ ou recebimento…  ( / )" value={termo} data-testid="busca-global"
+        onChange={(e) => { setTermo(e.target.value); setAberto(true); }} onFocus={() => setAberto(true)}
+        onKeyDown={(e) => { if (e.key === "Escape") { setAberto(false); e.target.blur(); } }} aria-label="Busca global" />
+      {aberto && res && (
+        <div className="busca-pop" data-testid="busca-resultados">
+          {vazio && <div className="busca-vazio">Nada encontrado para “{termo}”.</div>}
+          {res.operacoes.length > 0 && (
+            <div className="busca-grupo" data-grupo="operacoes">
+              <h5>Operações <span>{res.operacoes.length}</span></h5>
+              {res.operacoes.slice(0, LIM).map((o) => (
+                <button type="button" key={o.id} className="busca-item" data-item="operacao" onClick={() => ir("operacoes", o.numero)}>
+                  <b>{o.numero}</b> <span>{(db.clients || []).find((c) => c.id === o.clienteId)?.nome || "—"} · {opProduto(db, o)}</span> <Tag tone={opStatusInfo(o).tone}>{opStatusInfo(o).label}</Tag>
+                </button>
+              ))}
+              {res.operacoes.length > LIM && <button type="button" className="busca-mais" onClick={() => ir("operacoes", termo)}>Ver todas as {res.operacoes.length} em Operações →</button>}
+            </div>
+          )}
+          {res.clientes.length > 0 && (
+            <div className="busca-grupo" data-grupo="clientes">
+              <h5>Clientes <span>{res.clientes.length}</span></h5>
+              {res.clientes.slice(0, LIM).map((c) => (
+                <button type="button" key={c.id} className="busca-item" data-item="cliente" onClick={() => ir("operacoes", c.nome)}>
+                  <b>{c.nome}</b> <span>{c.documento || "sem documento"} · ver operações</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {res.receb.length > 0 && (
+            <div className="busca-grupo" data-grupo="recebimentos">
+              <h5>Recebimentos em aberto <span>{res.receb.length}</span></h5>
+              {res.receb.slice(0, LIM).map((r) => (
+                <button type="button" key={r.id} className="busca-item" data-item="recebimento" onClick={() => ir("agenda")}>
+                  <b>{fmtBRL(r.valor)}</b> <span>{recebimentoRef(db, r)} · {fmtDateBR(r.dataVencimento)}</span>
+                </button>
+              ))}
+              {res.receb.length > LIM && <button type="button" className="busca-mais" onClick={() => ir("agenda")}>Ver na Agenda ({res.receb.length}) →</button>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- status da operação (esteira): Em análise → Aprovada → Paga → Em cobrança → Liquidada / Cancelada ----
 const STATUS_OPERACAO = [
   { id: "analise", label: "Em análise", tone: "blue" },
@@ -2197,12 +2309,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         </Select>
       </Field>
       <Field label="Cliente">
-        <Select value={form.clienteId} onChange={(e) => setForm({ ...form, clienteId: e.target.value })} required>
-          <option value="">Selecione</option>
-          {db.clients.map((c) => (
-            <option key={c.id} value={c.id}>{c.nome}</option>
-          ))}
-        </Select>
+        <ClienteSelect clients={db.clients} value={form.clienteId} onChange={(e) => setForm({ ...form, clienteId: e.target.value })} required />
       </Field>
       <Field label="Valor aprovado (cliente)">
         <MoneyInput value={form.valorAprovado} onChange={(e) => onValorAprovadoChange(e.target.value)} />
@@ -2544,10 +2651,10 @@ function listaProdutos(db) {
   return [...vistos.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
 }
 
-function OperacoesPage({ db, mutate, user }) {
+function OperacoesPage({ db, mutate, user, buscaInicial = "" }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(buscaInicial);
   const [produtoFiltro, setProdutoFiltro] = useState("todos");
   const [ordem, setOrdem] = useState("recentes");
   const [statusFiltro, setStatusFiltro] = useState("todos");
@@ -5078,20 +5185,15 @@ function CreditoContratos({ db, mutate, onVerParcelas }) {
               </Select>
             </Field>
             <Field label="Cliente já cadastrado (opcional)">
-              <Select
+              <ClienteSelect
+                clients={db.clients}
                 value={form.clienteId}
+                vazio="Novo tomador"
                 onChange={(e) => {
                   const cli = db.clients.find((c) => c.id === e.target.value);
                   setForm({ ...form, clienteId: e.target.value, nome: cli ? cli.nome : form.nome });
                 }}
-              >
-                <option value="">Novo tomador</option>
-                {db.clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nome}
-                  </option>
-                ))}
-              </Select>
+              />
             </Field>
             <Field label={form.tomadorTipo === "pj" ? "Razão social" : "Nome completo"}>
               <TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
@@ -9170,6 +9272,7 @@ export default function App({ authEmail, onSignOut } = {}) {
   const [storageAvailable, setStorageAvailable] = useState(true);
   const [saveState, setSaveState] = useState("idle");
   const [page, setPage] = useState("dashboard");
+  const [irPara, setIrPara] = useState({ busca: "", k: 0 });
   const [currentUser, setCurrentUser] = useState(null);
   const [seededAdmin, setSeededAdmin] = useState(false);
   const saveChainRef = useRef(Promise.resolve());
@@ -9444,8 +9547,9 @@ export default function App({ authEmail, onSignOut } = {}) {
       </aside>
 
       <main className="main">
+        <BuscaGlobal db={db} user={currentUser} onGo={(pg, busca) => { setIrPara({ busca: busca || "", k: Date.now() }); setPage(pg); }} />
         {page === "dashboard" && <Dashboard db={db} user={currentUser} />}
-        {page === "operacoes" && <OperacoesPage db={db} mutate={mutate} user={currentUser} />}
+        {page === "operacoes" && <OperacoesPage key={irPara.k} buscaInicial={irPara.busca} db={db} mutate={mutate} user={currentUser} />}
         {page === "agenda" && <AgendaPage db={db} mutate={mutate} user={currentUser} />}
         {page === "esforco" && <EsforcoPage db={db} mutate={mutate} user={currentUser} />}
         {page === "ranking" && <RankingPage db={db} mutate={mutate} user={currentUser} />}
@@ -9821,6 +9925,18 @@ export function AppStyles() {
 .status-sel.st-cobranca { background:#FCE9E6; color:#B4483A; border-color:#F3C6BF; }
 .status-sel.st-liquidada { background:#F1EAF8; color:#6A4A8C; border-color:#DACBEC; }
 .status-sel.st-cancelada { background:#EEE; color:#777; border-color:#DDD; text-decoration:line-through; }
+.cli-select { display:flex; flex-direction:column; gap:6px; }
+.busca-global { position:relative; display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--line); border-radius:99px; padding:2px 14px; margin-bottom:18px; max-width:560px; }
+.busca-global > svg { color:var(--text-muted); flex:none; }
+.busca-global input.input { border:0; background:transparent; box-shadow:none; padding:9px 4px; }
+.busca-pop { position:absolute; z-index:60; left:0; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:0 14px 36px rgba(11,18,32,.16); padding:8px; max-height:70vh; overflow:auto; }
+.busca-grupo h5 { margin:8px 8px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); display:flex; gap:6px; }
+.busca-grupo h5 span { background:var(--line); border-radius:99px; padding:0 7px; }
+.busca-item { display:flex; gap:8px; align-items:center; flex-wrap:wrap; width:100%; text-align:left; background:none; border:0; border-radius:10px; padding:8px; cursor:pointer; font:inherit; color:var(--text); }
+.busca-item:hover, .busca-item:focus { background:var(--paper); outline:none; }
+.busca-item span { color:var(--text-muted); font-size:12.5px; min-width:0; overflow-wrap:anywhere; }
+.busca-mais { background:none; border:0; color:var(--brass-dark); font-weight:600; padding:6px 8px; cursor:pointer; font-size:12.5px; }
+.busca-vazio { padding:12px; color:var(--text-muted); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
