@@ -2864,6 +2864,69 @@ function recebimentoRef(db, r) {
   return o ? `${rotulo} · ${o.numero} · ${cli}` : rotulo;
 }
 
+// quem deve: cliente (honorário, TAC, crédito próprio), instituição (repasse) ou contratante (contrato próprio)
+function recebimentoDevedor(db, r) {
+  if (r.tipo === "cliente" || r.tipo === "honparc") {
+    const h = (db.honorarios || []).find((x) => x.id === r.refId);
+    const c = h ? (db.clients || []).find((x) => x.id === h.clienteId) : null;
+    return { chave: "cli-" + (h?.clienteId || "x"), nome: c?.nome || "Sem cliente", papel: "Cliente" };
+  }
+  if (r.tipo === "contrato") {
+    const c = (db.creditos || []).find((x) => x.id === r.refId);
+    return { chave: "ctr-" + (c?.id || "x"), nome: c?.nome || "Contrato", papel: "Contrato" };
+  }
+  const o = (db.operations || []).find((x) => x.id === r.refId);
+  if (r.tipo === "banco") {
+    const b = o ? (db.institutions || []).find((x) => x.id === o.instituicaoId) : null;
+    return { chave: "ins-" + (b?.id || "x"), nome: b?.nome || "Instituição", papel: "Instituição" };
+  }
+  if (o) {
+    const c = (db.clients || []).find((x) => x.id === o.clienteId);
+    return { chave: "cli-" + o.clienteId, nome: c?.nome || "Sem cliente", papel: "Cliente" };
+  }
+  return { chave: "man-" + normTxt(r.descricao || "manual"), nome: r.descricao || "Lançamento manual", papel: "Manual" };
+}
+
+// ranking de inadimplência: quem mais deve em atraso, quanto e há quantos dias
+function RankingInadimplencia({ db, itens, testid = "ranking-inadimplencia", limite = 5 }) {
+  const [todos, setTodos] = useState(false);
+  const mapa = {};
+  itens.filter((r) => !r.recebido && daysUntil(r.dataVencimento) < 0).forEach((r) => {
+    const d = recebimentoDevedor(db, r);
+    const g = (mapa[d.chave] = mapa[d.chave] || { ...d, valor: 0, qtd: 0, maxDias: 0 });
+    g.valor = round2(g.valor + (Number(r.valor) || 0));
+    g.qtd += 1;
+    g.maxDias = Math.max(g.maxDias, -daysUntil(r.dataVencimento));
+  });
+  const lista = Object.values(mapa).sort((a, b) => b.valor - a.valor || b.maxDias - a.maxDias);
+  if (!lista.length) return null;
+  const total = round2(lista.reduce((t, g) => t + g.valor, 0));
+  const vis = todos ? lista : lista.slice(0, limite);
+  return (
+    <div className="panel ranking-inad" data-testid={testid}>
+      <div className="ranking-head">
+        <h3>Ranking de inadimplência</h3>
+        <span className="muted">{lista.length} {lista.length === 1 ? "devedor" : "devedores"} · {fmtBRL(total)} em atraso</span>
+      </div>
+      <ol className="ranking-list">
+        {vis.map((g, i) => (
+          <li key={g.chave} data-devedor={g.nome}>
+            <span className="rk-pos">{i + 1}</span>
+            <span className="rk-nome"><b>{g.nome}</b><small>{g.papel} · {g.qtd} {g.qtd === 1 ? "título" : "títulos"} · maior atraso {g.maxDias} d</small></span>
+            <span className="rk-bar"><i style={{ width: Math.max(4, (g.valor / lista[0].valor) * 100) + "%" }} /></span>
+            <span className="rk-valor">{fmtBRL(g.valor)}<small>{((g.valor / total) * 100).toFixed(1).replace(".", ",")}%</small></span>
+          </li>
+        ))}
+      </ol>
+      {lista.length > limite && (
+        <button type="button" className="btn btn-ghost btn-sm" data-testid="ranking-toggle" onClick={() => setTodos(!todos)}>
+          {todos ? "Mostrar só os maiores" : `Ver todos (${lista.length})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // categoria do recebimento na Agenda
 const CATEGORIAS_RECEBIMENTO = ["Recebimento Instituição", "Honorário do cliente", "TAC", "Crédito próprio"];
 function recebimentoCategoria(r) {
@@ -3190,6 +3253,7 @@ function AgendaPage({ db, mutate, user }) {
       {(showForm || editingId) && <RecebimentoForm db={db} editing={editing} onCancel={() => { setShowForm(false); setEditingId(null); }} onSave={save} />}
 
       <CarteiraComposicao itens={porProduto} ativo={filter} onPick={setFilter} testid="agenda-carteira" />
+      <RankingInadimplencia db={db} itens={porProduto} testid="agenda-ranking" />
 
       <div className="subtabs">
         {filters.map((f) => (
@@ -5406,6 +5470,7 @@ function Dashboard({ db, user }) {
       {recebimentos.some((r) => !r.recebido) && (
         <div className="no-print">
           <CarteiraComposicao itens={recebimentos.map((r) => ({ ...r, status: recebimentoStatus(r) }))} testid="painel-carteira" />
+          <RankingInadimplencia db={db} itens={recebimentos} testid="painel-ranking" />
         </div>
       )}
 
@@ -9577,7 +9642,20 @@ export function AppStyles() {
       .faixa small { font-size: 10.5px; color: var(--text-muted); } .faixa em { font-style: normal; font-size: 11px; color: var(--text-muted); }
       .dias { display: block; margin-top: 2px; font-size: 10.5px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
       .dias-atraso, .dias-atrasado { color: #B0413E; } .dias-hoje { color: #B8892B; } .dias-futuro { color: #2F7D4F; }
-      .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .ranking-inad { margin-bottom: 16px; }
+.ranking-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.ranking-head h3 { margin:0; font-size:15px; }
+.ranking-list { list-style:none; margin:0 0 8px; padding:0; display:grid; gap:8px; }
+.ranking-list li { display:grid; grid-template-columns: 28px minmax(0,2fr) minmax(60px,1fr) auto; gap:12px; align-items:center; }
+.rk-pos { width:26px; height:26px; border-radius:50%; background:var(--ink); color:#fff; display:grid; place-items:center; font-size:12px; font-weight:700; }
+.rk-nome { display:flex; flex-direction:column; min-width:0; }
+.rk-nome b { overflow-wrap:anywhere; }
+.rk-nome small, .rk-valor small { color:var(--text-muted); font-size:11.5px; }
+.rk-bar { height:8px; background:var(--line); border-radius:99px; overflow:hidden; }
+.rk-bar i { display:block; height:100%; background:#B4483A; border-radius:99px; }
+.rk-valor { text-align:right; display:flex; flex-direction:column; font-weight:700; white-space:nowrap; }
+@media (max-width:700px){ .ranking-list li { grid-template-columns: 28px minmax(0,1fr) auto; } .rk-bar { display:none; } }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
       .chip:hover { border-color: var(--brass); }
