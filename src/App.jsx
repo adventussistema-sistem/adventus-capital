@@ -53,6 +53,7 @@ import {
 --------------------------------------------------------------- */
 
 const STORAGE_KEY = "adventus:db";
+export const __mergeDb = (...a) => mergeDb(...a);
 const SESSION_KEY = "adventus:session";
 const BUILD_TAG = "build 2026-09-08.2";
 
@@ -440,6 +441,55 @@ function extratoCaixa(db) {
   (db.despesas || []).filter((d) => d.pago).forEach((d) => add(d.dataPagamento, "saida", "Despesa", d.descricao || "Despesa", d.valor));
   return L.sort((x, y) => x.data.localeCompare(y.data) || (x.tipo === y.tipo ? 0 : x.tipo === "entrada" ? -1 : 1));
 }
+
+// ---- sincronização entre usuários: junta as alterações de várias pessoas em vez de sobrescrever ----
+function eqDeep(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((x, i) => eqDeep(x, b[i]));
+  const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+  const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+  return ka.length === kb.length && ka.every((k) => eqDeep(a[k], b[k]));
+}
+const ehObjeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const ehListaComId = (v) => Array.isArray(v) && v.every((x) => ehObjeto(x) && x.id !== undefined);
+// base = o que eu sabia do servidor; mine = minha versão; theirs = a versão atual do servidor
+function mergeValor(base, mine, theirs) {
+  if (eqDeep(mine, theirs)) return mine;
+  if (eqDeep(mine, base)) return theirs; // só os outros mexeram
+  if (eqDeep(theirs, base)) return mine; // só eu mexi
+  const todos = [base, mine, theirs];
+  if (todos.every((v) => v === undefined || ehObjeto(v))) {
+    const out = {};
+    new Set(todos.flatMap((o) => Object.keys(o || {}))).forEach((k) => {
+      const v = mergeValor(base?.[k], mine?.[k], theirs?.[k]);
+      if (v !== undefined) out[k] = v;
+    });
+    return out;
+  }
+  if (todos.every((v) => v === undefined || ehListaComId(v))) return mergeLista(base || [], mine || [], theirs || []);
+  return mine; // mesmo campo alterado por dois: vale o meu (o mais recente a salvar)
+}
+function mergeLista(base, mine, theirs) {
+  const por = (arr) => new Map(arr.map((x) => [x.id, x]));
+  const B = por(base), M = por(mine), T = por(theirs);
+  const ids = [...theirs.map((x) => x.id), ...mine.filter((x) => !T.has(x.id)).map((x) => x.id)];
+  const out = [];
+  ids.forEach((id) => {
+    const b = B.get(id), m = M.get(id), t = T.get(id);
+    if (m && t) { out.push(mergeValor(b, m, t)); return; }
+    if (m && !t) { if (!b || !eqDeep(m, b)) out.push(m); return; } // criado por mim, ou editado por mim (editar vence excluir)
+    if (!m && t) { if (!b || !eqDeep(t, b)) out.push(t); }         // criado por outro, ou editado por outro
+  });
+  return out;
+}
+function mergeDb(base, mine, theirs) {
+  const r = mergeValor(base || {}, mine, theirs);
+  if (Array.isArray(r.auditoria)) r.auditoria = [...r.auditoria].sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, AUDIT_MAX);
+  return r;
+}
+const SYNC_MS = 8000;
 
 // ---- backup: baixa todos os dados em um arquivo e restaura a partir dele ----
 const BACKUP_DIAS_AVISO = 7;
@@ -9979,19 +10029,59 @@ export default function App({ authEmail, onSignOut } = {}) {
   const [currentUser, setCurrentUser] = useState(null);
   const [seededAdmin, setSeededAdmin] = useState(false);
   const saveChainRef = useRef(Promise.resolve());
+  const syncRef = useRef({ base: null, stamp: null, pend: 0 });
+  const [avisoSync, setAvisoSync] = useState("");
 
+  const lerRemoto = async () => {
+    const st = window.storage;
+    if (typeof st.getV === "function") { const r = await st.getV(STORAGE_KEY, true); return { texto: r.value, ver: r.version }; }
+    const r = await st.get(STORAGE_KEY, true);
+    return { texto: r && r.value, ver: null };
+  };
+  const gravarRemoto = async (texto, ver) => {
+    const st = window.storage;
+    if (typeof st.setV === "function") return st.setV(STORAGE_KEY, texto, true, ver);
+    await st.set(STORAGE_KEY, texto, true);
+    return { ok: true, version: null };
+  };
+
+  // grava sem apagar o trabalho dos outros: relê o servidor, junta (mesclagem por registro) e só grava se ninguém mudou no meio
   const persist = (next) => {
     if (!storageAvailable) return;
     setSaveState("saving");
+    syncRef.current.pend += 1;
     saveChainRef.current = saveChainRef.current
       .catch(() => {})
       .then(async () => {
         try {
-          await window.storage.set(STORAGE_KEY, JSON.stringify(next), true);
-          setSaveState("saved");
+          for (let i = 0; i < 6; i++) {
+            const r = await lerRemoto();
+            let remoto = null;
+            try { remoto = r.texto ? JSON.parse(r.texto) : null; } catch (e) { remoto = null; }
+            const alvo = remoto ? mergeDb(syncRef.current.base || {}, next, remoto) : next;
+            const res = await gravarRemoto(JSON.stringify(alvo), r.ver);
+            if (res && res.ok && r.ver === null) {
+              // sem trava de versão no servidor: confere se a nossa gravação não foi atropelada no mesmo instante
+              await new Promise((ok) => setTimeout(ok, 60));
+              const conf = await lerRemoto();
+              let confObj = null;
+              try { confObj = conf.texto ? JSON.parse(conf.texto) : null; } catch (e) { confObj = null; }
+              if (!confObj || !eqDeep(confObj, alvo)) continue;
+            }
+            if (res && res.ok) {
+              syncRef.current.base = alvo;
+              syncRef.current.stamp = null;
+              if (!eqDeep(alvo, next)) setDb((cur) => (cur === next ? alvo : mergeDb(next, cur, alvo)));
+              setSaveState("saved");
+              return;
+            }
+          }
+          throw new Error("conflito de gravação persistente");
         } catch (e) {
           console.error("Falha ao salvar:", e);
           setSaveState("error");
+        } finally {
+          syncRef.current.pend -= 1;
         }
       });
   };
@@ -10012,6 +10102,7 @@ export default function App({ authEmail, onSignOut } = {}) {
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000)),
       ]);
       loaded = res && res.value ? JSON.parse(res.value) : emptyDb();
+      syncRef.current.base = res && res.value ? JSON.parse(res.value) : null;
     } catch (e) {
       console.warn("Nenhum dado salvo encontrado ainda (ou falha ao ler):", e);
       loaded = emptyDb();
@@ -10127,6 +10218,38 @@ export default function App({ authEmail, onSignOut } = {}) {
       }
     })();
   }, []);
+
+  // atualização automática: busca o que os outros mudaram e junta ao que está na tela
+  useEffect(() => {
+    if (!currentUser || loading || !storageAvailable || typeof window === "undefined" || !window.storage) return undefined;
+    let vivo = true;
+    const tick = async () => {
+      if (!vivo || syncRef.current.pend > 0) return;
+      try {
+        const st = window.storage;
+        if (typeof st.peek === "function") {
+          const stamp = await st.peek(STORAGE_KEY, true);
+          if (stamp && stamp === syncRef.current.stamp) return;
+          syncRef.current.stamp = stamp;
+        }
+        const r = await lerRemoto();
+        if (!vivo || !r.texto || syncRef.current.pend > 0) return;
+        const remoto = JSON.parse(r.texto);
+        const base = syncRef.current.base;
+        if (base && eqDeep(base, remoto)) return;
+        syncRef.current.base = remoto;
+        setDb((cur) => { const novo = mergeDb(base || {}, cur, remoto); return eqDeep(novo, cur) ? cur : novo; });
+        const d = new Date();
+        setAvisoSync(`Atualizado com alterações de outra pessoa às ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}.`);
+      } catch (e) { /* sem rede agora: tenta no próximo ciclo */ }
+    };
+    const ms = (typeof window !== "undefined" && window.__ADV_SYNC_MS) || SYNC_MS;
+    const id = setInterval(tick, ms);
+    const aoVoltar = () => { if (!document.hidden) tick(); };
+    window.addEventListener("focus", aoVoltar);
+    document.addEventListener("visibilitychange", aoVoltar);
+    return () => { vivo = false; clearInterval(id); window.removeEventListener("focus", aoVoltar); document.removeEventListener("visibilitychange", aoVoltar); };
+  }, [currentUser, loading, storageAvailable]);
 
   const mutate = (updater, opcoes = {}) => {
     setDb((prev) => {
@@ -10254,6 +10377,7 @@ export default function App({ authEmail, onSignOut } = {}) {
           {storageAvailable && saveState === "saved" && "Tudo salvo."}
           {storageAvailable && saveState === "error" && "Erro ao salvar."}
           {storageAvailable && saveState === "idle" && "Dados salvos automaticamente."}
+          {storageAvailable && avisoSync && <small className="sync-aviso" data-testid="sync-aviso" style={{ display: "block", opacity: 0.8 }}>{avisoSync}</small>}
         </div>
         <div className="build-tag">{BUILD_TAG}</div>
       </aside>
