@@ -21,6 +21,7 @@ import {
   Tag as TagIcon,
   Package,
   Search,
+  Eye,
   Download,
   Printer,
   Trophy,
@@ -341,6 +342,103 @@ function BuscaGlobal({ db, user, onGo }) {
       )}
     </div>
   );
+}
+
+// ---- auditoria: registra quem criou, alterou ou excluiu o quê (calculada em um único ponto: mutate) ----
+const AUDIT_COLECOES = {
+  operations: "Operação", honorarios: "Honorário", clients: "Cliente", institutions: "Instituição", partners: "Parceiro",
+  collaborators: "Colaborador", recebimentos: "Recebimento", despesas: "Despesa", creditos: "Contrato de crédito", users: "Usuário", produtos: "Produto",
+};
+const AUDIT_CAMPOS = {
+  valorHonorario: "Valor do honorário", valorLiberado: "Valor liberado", valorAReceber: "Valor a receber do banco", valorAprovado: "Valor aprovado", valorParceiro: "Repasse ao parceiro",
+  imposto: "Imposto", dataCredito: "Data do crédito", dataRecebimentoBanco: "Data de recebimento do banco", recebidoBanco: "Banco já pagou", clienteId: "Cliente", instituicaoId: "Instituição",
+  colaboradorId: "Consultor", liderId: "Líder", parceiroId: "Parceiro", modalidade: "Produto", numero: "Nº da operação", status: "Status", dataVencimento: "Vencimento", dataRecebimento: "Data do recebimento",
+  recebido: "Recebido", valor: "Valor", descricao: "Descrição", nome: "Nome", papel: "Papel", pago: "Pago", dataPagamento: "Data do pagamento", tacValorGeral: "Valor do TAC", tacRecebido: "TAC recebido",
+};
+const auditCampo = (k) => AUDIT_CAMPOS[k] || k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
+function auditValor(k, v) {
+  if (/senha/i.test(k)) return "(oculto)";
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "sim" : "não";
+  if (Array.isArray(v)) return `${v.length} item(ns)`;
+  if (typeof v === "object") return "{…}";
+  const t = String(v);
+  return t.length > 60 ? t.slice(0, 57) + "…" : t;
+}
+function auditRotulo(col, o, db) {
+  if (col === "operations") return o.numero || o.id;
+  if (col === "honorarios") return `${(db.clients || []).find((c) => c.id === o.clienteId)?.nome || "—"} · ${o.modalidade || "sem produto"}`;
+  if (col === "users") return o.usuario || o.nome || o.id;
+  return o.nome || o.descricao || o.numero || o.id;
+}
+// compara duas versões do banco e devolve os registros de auditoria (mais novos primeiro)
+function diffAuditoria(prev, next, user) {
+  const out = [];
+  const ts = new Date().toISOString();
+  Object.keys(AUDIT_COLECOES).forEach((col) => {
+    const a = prev[col], b = next[col];
+    if (a === b || !Array.isArray(b)) return;
+    const antes = new Map((Array.isArray(a) ? a : []).map((x) => [x.id, x]));
+    const depois = new Map(b.map((x) => [x.id, x]));
+    const base = { colecao: col, usuarioId: user.id, usuario: user.nome || user.usuario };
+    b.forEach((x) => {
+      const old = antes.get(x.id);
+      if (!old) { out.push({ ...base, id: uid(), ts, acao: "criou", registroId: x.id, rotulo: auditRotulo(col, x, next), mudancas: [] }); return; }
+      if (old === x) return;
+      const mud = [];
+      new Set([...Object.keys(old), ...Object.keys(x)]).forEach((k) => {
+        if (k === "id" || k === "criadoEm") return;
+        if (col === "operations" && k === "status") {
+          // operações antigas não têm status gravado: mostra o status que valia (calculado)
+          const de = opStatusInfo(old).label, para = opStatusInfo(x).label;
+          if (de !== para) mud.push({ campo: "Status", de, para });
+          return;
+        }
+        if (JSON.stringify(old[k]) !== JSON.stringify(x[k])) mud.push({ campo: auditCampo(k), de: auditValor(k, old[k]), para: auditValor(k, x[k]) });
+      });
+      if (mud.length) out.push({ ...base, id: uid(), ts, acao: "alterou", registroId: x.id, rotulo: auditRotulo(col, x, next), mudancas: mud });
+    });
+    antes.forEach((x, id) => { if (!depois.has(id)) out.push({ ...base, id: uid(), ts, acao: "excluiu", registroId: id, rotulo: auditRotulo(col, x, prev), mudancas: [] }); });
+  });
+  return out;
+}
+const AUDIT_MAX = 3000;
+
+// ---- extrato do caixa (razão): cada entrada e saída, com saldo corrido; espelha o Fluxo de caixa linha a linha ----
+function extratoCaixa(db) {
+  const L = [];
+  const add = (data, tipo, origem, descricao, valor) => {
+    const v = Number(valor) || 0;
+    if (!data || !v) return;
+    L.push({ data, ym: monthKey(data), tipo, origem, descricao, valor: round2(v) });
+  };
+  const cliNome = (id) => (db.clients || []).find((c) => c.id === id)?.nome || "—";
+  const opNum = (id) => (db.operations || []).find((o) => o.id === id)?.numero || "—";
+  (db.recebimentos || []).forEach((r) => {
+    if (!r.recebido) return;
+    if (r.tipo === "cliente") add(r.dataRecebimento, "entrada", "Honorário do cliente", r.descricao || recebimentoRef(db, r), r.valor);
+    if (r.tipo === "banco") add(r.dataRecebimento, "entrada", "Repasse da instituição", r.descricao || recebimentoRef(db, r), r.valor);
+  });
+  (db.honorarios || []).forEach((h) => {
+    if (h.formaPagamentoHon !== "parcelado") return;
+    (h.recebiveisHon || []).filter((x) => x.pago).forEach((x) => add(x.dataPagamento || x.vencimento, "entrada", "Honorário do cliente", `Parcela ${x.n} · ${cliNome(h.clienteId)}`, x.valor));
+  });
+  const opsComAgenda = new Set((db.recebimentos || []).filter((r) => r.tipo === "banco").map((r) => r.refId));
+  (db.operations || []).forEach((o) => {
+    if (o.recebidoBanco && !opsComAgenda.has(o.id)) add(o.dataRecebimentoBanco, "entrada", "Repasse da instituição", `Operação ${o.numero}`, o.valorAReceber);
+    if (o.tacAtivo && o.tacRecebido) add(o.tacDataRecebimento, "entrada", "TAC", `TAC · operação ${o.numero}`, ((Number(o.tacValorGeral) || 0) * (Number(o.tacPctAdventus) || 0)) / 100);
+  });
+  (db.creditos || []).forEach((c) => {
+    add(c.dataContrato, "saida", "Crédito liberado", `Contrato · ${c.nome || "tomador"}`, c.principal);
+    (c.parcelas || []).filter((p) => p.pago).forEach((p) => add(p.dataPagamento, "entrada", "Crédito próprio", `Parcela ${p.n || ""} · ${c.nome || "tomador"}`, p.valorPago));
+  });
+  opsCreditoProprio(db).forEach((o) => {
+    const dc = opDataCredito(db, o);
+    if ((o.recebiveis || []).length) add(dc, "saida", "Crédito liberado", `Operação ${o.numero} · ${cliNome(o.clienteId)}`, opPrincipal(db, o));
+    (o.recebiveis || []).filter((p) => p.pago).forEach((p) => add(p.dataPagamento || p.vencimento, "entrada", "Crédito próprio", `Parcela ${p.n} · operação ${o.numero}`, p.valor));
+  });
+  (db.despesas || []).filter((d) => d.pago).forEach((d) => add(d.dataPagamento, "saida", "Despesa", d.descricao || "Despesa", d.valor));
+  return L.sort((x, y) => x.data.localeCompare(y.data) || (x.tipo === y.tipo ? 0 : x.tipo === "entrada" ? -1 : 1));
 }
 
 // ---- status da operação (esteira): Em análise → Aprovada → Paga → Em cobrança → Liquidada / Cancelada ----
@@ -2099,6 +2197,9 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
     // Operação
     numero: editingOp?.numero || proximoNumeroOperacao(db),
     status: editingOp ? opStatus(editingOp) : "analise",
+    anexos: editingOp?.anexos || [],
+    anexoNome: "",
+    anexoUrl: "",
     instituicaoId: editingOp?.instituicaoId || "",
     clienteId: editingOp?.clienteId || editingHon?.clienteId || "",
     valorAprovado: editingOp?.valorAprovado ?? "",
@@ -2249,6 +2350,7 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
           operacao: {
             numero: form.numero,
             status: form.status,
+            anexos: form.anexos,
             instituicaoId: form.instituicaoId,
             clienteId: form.clienteId,
             valorAprovado: Number(form.valorAprovado) || 0,
@@ -2607,6 +2709,28 @@ function OperacaoCompletaForm({ db, editingOp, editingHon, onSave, onCancel, use
         )}
       </div>
 
+      <div className="panel" data-testid="anexos-op">
+        <h3 className="panel-title">Documentos da operação</h3>
+        <p className="panel-note">Cole o link do arquivo (Google Drive, OneDrive etc.). Contrato, proposta e comprovantes ficam ligados a esta operação.</p>
+        {form.anexos.map((a, i) => (
+          <div key={i} className="anexo-linha">
+            <Link2 size={14} />
+            <a href={a.url} target="_blank" rel="noopener noreferrer">{a.nome}</a>
+            <button type="button" className="btn btn-ghost btn-sm" aria-label={`Remover ${a.nome}`} data-testid="anexo-remover" onClick={() => setForm({ ...form, anexos: form.anexos.filter((_, j) => j !== i) })}>Remover</button>
+          </div>
+        ))}
+        <div className="inline-form">
+          <input className="input" placeholder="Nome (ex.: Contrato assinado)" value={form.anexoNome} onChange={(e) => setForm({ ...form, anexoNome: e.target.value })} data-testid="anexo-nome" />
+          <input className="input" placeholder="Link (https://…)" value={form.anexoUrl} onChange={(e) => setForm({ ...form, anexoUrl: e.target.value })} data-testid="anexo-url" />
+          <Btn type="button" variant="ghost" data-testid="anexo-add" onClick={() => {
+            const url = form.anexoUrl.trim();
+            if (!url) return;
+            const link = /^https?:\/\//i.test(url) ? url : "https://" + url;
+            setForm({ ...form, anexos: [...form.anexos, { nome: form.anexoNome.trim() || "Documento", url: link }], anexoNome: "", anexoUrl: "" });
+          }}>Adicionar</Btn>
+        </div>
+      </div>
+
       <div className="form-actions">
         <Btn type="submit">
           <Check size={14} /> Salvar operação completa
@@ -2813,7 +2937,12 @@ function OperacoesPage({ db, mutate, user, buscaInicial = "" }) {
                 const c = hon ? computeHonorario(hon) : null;
                 return (
                   <tr key={o.id}>
-                    <td>{o.numero}</td>
+                    <td>{o.numero}{(o.anexos || []).length > 0 && (
+                      <div className="anexos-mini" data-testid="anexos-lista">
+                        {o.anexos.slice(0, 2).map((a, i) => <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.url}><Link2 size={11} /> {a.nome}</a>)}
+                        {o.anexos.length > 2 && <small>+{o.anexos.length - 2}</small>}
+                      </div>
+                    )}</td>
                     <td>
                       <select className={`status-sel st-${opStatus(o)}`} value={opStatus(o)} aria-label={`Status da operação ${o.numero}`} data-testid="status-op"
                         onChange={(e) => mutate((d) => ({ ...d, operations: d.operations.map((x) => (x.id === o.id ? { ...x, status: e.target.value } : x)) }))}>
@@ -4363,6 +4492,128 @@ function ProjecaoPanel({ db }) {
   );
 }
 
+// Extrato do caixa (razão): todas as entradas e saídas pagas, com saldo corrido, conferido com o Fluxo de caixa
+function ExtratoPanel({ db }) {
+  const meses = lastMonths(12);
+  const [ym, setYm] = useState(meses[meses.length - 1]);
+  const [tipo, setTipo] = useState("todos");
+  const [busca, setBusca] = useState("");
+  const todas = extratoCaixa(db);
+  const doMes = todas.filter((l) => l.ym === ym);
+  const abertura = saldoInicialMes(db, ym);
+  let corrido = abertura;
+  const comSaldo = doMes.map((l) => { corrido = round2(corrido + (l.tipo === "entrada" ? l.valor : -l.valor)); return { ...l, saldo: corrido }; });
+  const t = normTxt(busca);
+  const vis = comSaldo.filter((l) => (tipo === "todos" || l.tipo === tipo) && (!t || normTxt(`${l.origem} ${l.descricao}`).includes(t)));
+  const ent = round2(doMes.filter((l) => l.tipo === "entrada").reduce((x, l) => x + l.valor, 0));
+  const sai = round2(doMes.filter((l) => l.tipo === "saida").reduce((x, l) => x + l.valor, 0));
+  const fx = fluxoCaixaMes(db, ym);
+  const dif = round2(ent - sai - fx.saldo);
+  const confere = Math.abs(dif) < 0.01;
+  const pg = usePagina(vis, `${ym}|${tipo}|${busca}`, 50);
+  const exportar = () => baixarCSV(`extrato-${ym}`, ["Data", "Tipo", "Origem", "Descrição", "Entrada", "Saída", "Saldo"],
+    vis.map((l) => [fmtDateBR(l.data), l.tipo === "entrada" ? "Entrada" : "Saída", l.origem, l.descricao, l.tipo === "entrada" ? l.valor : "", l.tipo === "saida" ? l.valor : "", l.saldo]));
+  return (
+    <div data-testid="extrato">
+      <p className="panel-note">Todas as movimentações que de fato entraram ou saíram do caixa no mês, uma por linha, com o saldo corrido. É a mesma base do Fluxo de caixa, conferida automaticamente.</p>
+      <div className="toolbar-row">
+        <label className="toolbar-field"><span>Mês</span>
+          <Select value={ym} onChange={(e) => setYm(e.target.value)} data-testid="extrato-mes">{meses.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</Select>
+        </label>
+        <label className="toolbar-field"><span>Tipo</span>
+          <Select value={tipo} onChange={(e) => setTipo(e.target.value)} data-testid="extrato-tipo"><option value="todos">Entradas e saídas</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option></Select>
+        </label>
+        <label className="toolbar-field"><span>Buscar</span>
+          <input className="input" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="origem ou descrição" data-testid="extrato-busca" />
+        </label>
+        <BtnExportar onClick={exportar} total={vis.length} testid="extrato-exportar" />
+      </div>
+      <div className="cards-grid">
+        <div className="stat-card"><span className="stat-label">Saldo inicial</span><span className="stat-value" data-testid="extrato-inicial">{fmtBRL(abertura)}</span></div>
+        <div className="stat-card"><span className="stat-label">Entradas</span><span className="stat-value positive" data-testid="extrato-entradas">{fmtBRL(ent)}</span></div>
+        <div className="stat-card"><span className="stat-label">Saídas</span><span className="stat-value negative" data-testid="extrato-saidas">{fmtBRL(sai)}</span></div>
+        <div className="stat-card stat-card-highlight"><span className="stat-label">Saldo final</span><span className="stat-value" data-testid="extrato-final">{fmtBRL(round2(abertura + ent - sai))}</span></div>
+      </div>
+      <p className={`panel-note ${confere ? "" : "negative"}`} data-testid="extrato-confere">
+        {confere ? "✓ Confere com o Fluxo de caixa deste mês." : `⚠ Diferença de ${fmtBRL(dif)} em relação ao Fluxo de caixa — avise o suporte.`}
+      </p>
+      {vis.length === 0 ? <EmptyState text="Nenhuma movimentação no mês com esses filtros." /> : (
+        <div className="table-scroll">
+          <table className="table">
+            <thead><tr><th>Data</th><th>Origem</th><th>Descrição</th><th>Entrada</th><th>Saída</th><th>Saldo</th></tr></thead>
+            <tbody>
+              {pg.fatia.map((l, i) => (
+                <tr key={i} data-extrato={l.tipo}>
+                  <td>{fmtDateBR(l.data)}</td>
+                  <td>{l.origem}</td>
+                  <td>{l.descricao}</td>
+                  <td className="num positive">{l.tipo === "entrada" ? fmtBRL(l.valor) : ""}</td>
+                  <td className="num negative">{l.tipo === "saida" ? fmtBRL(l.valor) : ""}</td>
+                  <td className="num strong">{fmtBRL(l.saldo)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Paginacao pg={pg} testid="extrato-pag" />
+    </div>
+  );
+}
+
+// Auditoria: histórico de quem criou, alterou ou excluiu registros
+function AuditoriaPanel({ db }) {
+  const [col, setCol] = useState("todas");
+  const [acao, setAcao] = useState("todas");
+  const [busca, setBusca] = useState("");
+  const log = db.auditoria || [];
+  const t = normTxt(busca);
+  const vis = log.filter((e) => (col === "todas" || e.colecao === col) && (acao === "todas" || e.acao === acao) &&
+    (!t || normTxt(`${e.usuario} ${e.rotulo} ${e.mudancas.map((m) => `${m.campo} ${m.de} ${m.para}`).join(" ")}`).includes(t)));
+  const pg = usePagina(vis, `${col}|${acao}|${busca}`, 25);
+  const quando = (ts) => { const d = new Date(ts); const pad = (n) => String(n).padStart(2, "0"); return `${fmtDateBR(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const exportar = () => baixarCSV("auditoria", ["Quando", "Quem", "Ação", "Onde", "Registro", "Mudanças"],
+    vis.map((e) => [quando(e.ts), e.usuario, e.acao, AUDIT_COLECOES[e.colecao], e.rotulo, e.mudancas.map((m) => `${m.campo}: ${m.de} → ${m.para}`).join(" | ")]));
+  return (
+    <div data-testid="auditoria">
+      <p className="panel-note">Registra quem criou, alterou ou excluiu dados importantes (operações, honorários, clientes, recebimentos, despesas, usuários e outros) e o que mudou. Guarda os últimos {AUDIT_MAX} registros. Só a Diretoria vê esta tela.</p>
+      <div className="toolbar-row">
+        <label className="toolbar-field"><span>Onde</span>
+          <Select value={col} onChange={(e) => setCol(e.target.value)} data-testid="audit-col"><option value="todas">Tudo</option>{Object.entries(AUDIT_COLECOES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
+        </label>
+        <label className="toolbar-field"><span>Ação</span>
+          <Select value={acao} onChange={(e) => setAcao(e.target.value)} data-testid="audit-acao"><option value="todas">Todas</option><option value="criou">Criou</option><option value="alterou">Alterou</option><option value="excluiu">Excluiu</option></Select>
+        </label>
+        <label className="toolbar-field"><span>Buscar</span>
+          <input className="input" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="usuário, registro ou campo" data-testid="audit-busca" />
+        </label>
+        <span className="muted toolbar-total">{vis.length} de {log.length} registros</span>
+        <BtnExportar onClick={exportar} total={vis.length} testid="audit-exportar" />
+      </div>
+      {vis.length === 0 ? <EmptyState text="Nenhuma alteração registrada ainda. Daqui para frente, tudo o que for mexido aparece aqui." /> : (
+        <div className="table-scroll">
+          <table className="table">
+            <thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Onde</th><th>Registro</th><th>O que mudou</th></tr></thead>
+            <tbody>
+              {pg.fatia.map((e) => (
+                <tr key={e.id} data-audit={e.acao}>
+                  <td className="nw">{quando(e.ts)}</td>
+                  <td>{e.usuario}</td>
+                  <td><Tag tone={e.acao === "criou" ? "positive" : e.acao === "excluiu" ? "negative" : "blue"}>{e.acao === "criou" ? "Criou" : e.acao === "excluiu" ? "Excluiu" : "Alterou"}</Tag></td>
+                  <td>{AUDIT_COLECOES[e.colecao]}</td>
+                  <td>{e.rotulo}</td>
+                  <td>{e.mudancas.length ? e.mudancas.map((m, i) => <div key={i} className="audit-mud"><b>{m.campo}:</b> {m.de} → {m.para}</div>) : <span className="muted">—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Paginacao pg={pg} testid="audit-pag" />
+    </div>
+  );
+}
+
 function FinanceiroPage({ db, mutate, user }) {
   const [tab, setTab] = useState("despesas");
   if (user.papel !== "diretora") {
@@ -4373,7 +4624,9 @@ function FinanceiroPage({ db, mutate, user }) {
     { id: "categorias", label: "Categorias de despesa", icon: TagIcon },
     { id: "fluxo", label: "Fluxo de caixa", icon: Wallet },
     { id: "projecao", label: "Fluxo projetado", icon: Wallet },
+    { id: "extrato", label: "Extrato do caixa", icon: Receipt },
     { id: "dre", label: "DRE simplificado", icon: Scale },
+    { id: "auditoria", label: "Auditoria", icon: Eye },
   ];
   return (
     <div>
@@ -4396,6 +4649,8 @@ function FinanceiroPage({ db, mutate, user }) {
       )}
       {tab === "fluxo" && <FluxoCaixaPanel db={db} mutate={mutate} />}
       {tab === "projecao" && <ProjecaoPanel db={db} />}
+      {tab === "extrato" && <ExtratoPanel db={db} />}
+      {tab === "auditoria" && <AuditoriaPanel db={db} />}
       {tab === "dre" && <DREPanel db={db} />}
     </div>
   );
@@ -9774,6 +10029,15 @@ export default function App({ authEmail, onSignOut } = {}) {
         console.error("Erro ao atualizar os dados:", e);
         return prev;
       }
+      // auditoria: grava quem mudou o quê (ignora mudanças sem usuário logado, como a carga inicial)
+      if (currentUser && next !== prev) {
+        try {
+          const ents = diffAuditoria(prev, next, currentUser);
+          if (ents.length) next = { ...next, auditoria: [...ents, ...(next.auditoria || prev.auditoria || [])].slice(0, AUDIT_MAX) };
+        } catch (e) {
+          console.error("Auditoria:", e);
+        }
+      }
       persist(next);
       return next;
     });
@@ -10287,6 +10551,11 @@ export function AppStyles() {
 .dre-tab td:first-child, .dre-tab th:first-child { position:sticky; left:0; background:var(--panel); z-index:1; }
 .dre-tab tr.dre-forte td { background:var(--paper); }
 .dre-tab tr.dre-forte td:first-child { background:var(--paper); }
+.audit-mud { font-size:12px; white-space:normal; }
+.anexo-linha { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); }
+.anexo-linha a { flex:1; min-width:0; overflow-wrap:anywhere; }
+.anexos-mini { display:flex; flex-direction:column; gap:2px; margin-top:2px; font-size:11.5px; }
+.anexos-mini a { color:var(--brass-dark); text-decoration:none; display:inline-flex; align-items:center; gap:3px; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
       .chip b { font-weight: 600; font-size: 11px; background: #F0EDE3; color: var(--text-muted); border-radius: 999px; padding: 1px 7px; }
