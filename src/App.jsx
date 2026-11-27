@@ -441,6 +441,105 @@ function extratoCaixa(db) {
   return L.sort((x, y) => x.data.localeCompare(y.data) || (x.tipo === y.tipo ? 0 : x.tipo === "entrada" ? -1 : 1));
 }
 
+// ---- backup: baixa todos os dados em um arquivo e restaura a partir dele ----
+const BACKUP_DIAS_AVISO = 7;
+function nomeArquivoBackup() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `adventus-backup-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function montarBackup(db, user) {
+  const { ultimoBackup, ...dados } = db; // o carimbo do último backup não faz parte dos dados
+  return { app: "adventus-capital", versao: 1, geradoEm: new Date().toISOString(), geradoPor: user?.nome || user?.usuario || "", dados };
+}
+// aceita o arquivo de backup (com envelope) ou o JSON puro; confere o mínimo para não restaurar um arquivo errado
+function lerBackup(texto) {
+  let obj;
+  try { obj = JSON.parse(texto); } catch (e) { return { erro: "O arquivo não é um backup válido (não foi possível ler o conteúdo)." }; }
+  const dados = obj && obj.app === "adventus-capital" && obj.dados ? obj.dados : obj;
+  const listas = ["operations", "honorarios", "clients", "users"];
+  if (!dados || typeof dados !== "object" || !listas.every((k) => Array.isArray(dados[k]))) return { erro: "Este arquivo não parece ser um backup do sistema Adventus." };
+  if (!dados.users.some((u) => u.papel === "diretora")) return { erro: "O backup não tem nenhum usuário da Diretoria; restaurar assim trancaria o sistema." };
+  return { dados, geradoEm: obj.geradoEm || null, geradoPor: obj.geradoPor || "" };
+}
+function resumoBackup(d) {
+  const n = (k) => (Array.isArray(d[k]) ? d[k].length : 0);
+  return `${n("operations")} operações, ${n("honorarios")} honorários, ${n("clients")} clientes, ${n("recebimentos")} recebimentos, ${n("despesas")} despesas, ${n("users")} usuários`;
+}
+function diasDesde(iso) {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+
+function BackupPanel({ db, mutate, user }) {
+  const [msg, setMsg] = useState(null);
+  const [pendente, setPendente] = useState(null);
+  const dias = diasDesde(db.ultimoBackup);
+  const baixar = () => {
+    const blob = new Blob([JSON.stringify(montarBackup(db, user), null, 1)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nomeArquivoBackup() + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    mutate((d) => ({ ...d, ultimoBackup: new Date().toISOString() }), { semAuditoria: true });
+    setMsg({ ok: true, texto: "Backup baixado. Guarde o arquivo em um lugar seguro (ex.: Drive da empresa)." });
+  };
+  const escolher = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      const r = lerBackup(String(fr.result));
+      if (r.erro) { setPendente(null); setMsg({ ok: false, texto: r.erro }); } else { setPendente({ ...r, arquivo: f.name }); setMsg(null); }
+    };
+    fr.readAsText(f);
+    e.target.value = "";
+  };
+  const restaurar = () => {
+    const alvo = pendente;
+    mutate((prev) => {
+      const aud = { id: uid(), ts: new Date().toISOString(), acao: "alterou", colecao: "users", usuarioId: user.id, usuario: user.nome || user.usuario, registroId: "backup", rotulo: "Restauração de backup", mudancas: [{ campo: "Dados", de: resumoBackup(prev), para: resumoBackup(alvo.dados) }] };
+      return { ...emptyDb(), ...alvo.dados, ultimoBackup: prev.ultimoBackup, auditoria: [aud, ...(alvo.dados.auditoria || [])].slice(0, AUDIT_MAX) };
+    }, { semAuditoria: true });
+    setPendente(null);
+    setMsg({ ok: true, texto: "Backup restaurado. Os dados do sistema agora são os do arquivo." });
+  };
+  return (
+    <div className="panel" data-testid="backup">
+      <h3 className="panel-title">Backup dos dados</h3>
+      <p className="panel-note">
+        Baixa uma cópia completa de tudo (operações, clientes, financeiro, usuários…). Faça isso toda semana e antes de qualquer mudança grande.
+        <strong> O arquivo contém as senhas dos usuários — guarde em local restrito.</strong>
+      </p>
+      <p className="muted" data-testid="backup-ultimo">
+        {dias === null ? "Nenhum backup baixado ainda." : dias === 0 ? "Último backup: hoje." : `Último backup: há ${dias} dia(s).`}
+      </p>
+      <div className="form-actions">
+        <Btn type="button" onClick={baixar} data-testid="backup-baixar">Baixar backup agora</Btn>
+        <label className="btn btn-ghost" style={{ cursor: "pointer" }}>
+          Restaurar de um arquivo…
+          <input type="file" accept=".json,application/json" onChange={escolher} data-testid="backup-arquivo" style={{ display: "none" }} />
+        </label>
+      </div>
+      {msg && <p className={`panel-note ${msg.ok ? "" : "negative"}`} data-testid="backup-msg">{msg.texto}</p>}
+      {pendente && (
+        <div className="alert-banner" data-testid="backup-confirma" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+          <span><strong>Substituir todos os dados atuais?</strong> O arquivo “{pendente.arquivo}”{pendente.geradoEm ? ` (gerado em ${fmtDateBR(pendente.geradoEm.slice(0, 10))}${pendente.geradoPor ? ` por ${pendente.geradoPor}` : ""})` : ""} tem: {resumoBackup(pendente.dados)}.
+            Agora o sistema tem: {resumoBackup(db)}. Baixe um backup do estado atual antes, se tiver dúvida.</span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <Btn type="button" onClick={restaurar} data-testid="backup-confirmar">Sim, restaurar</Btn>
+            <Btn type="button" variant="ghost" onClick={() => setPendente(null)}>Cancelar</Btn>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- status da operação (esteira): Em análise → Aprovada → Paga → Em cobrança → Liquidada / Cancelada ----
 const STATUS_OPERACAO = [
   { id: "analise", label: "Em análise", tone: "blue" },
@@ -2011,6 +2110,7 @@ function CadastrosPage({ db, mutate, user }) {
     { id: "colaboradores", label: "Colaboradores", icon: Users },
     ...(isDiretora ? [{ id: "tabela", label: "Metas e Comissão", icon: Percent }] : []),
     ...(isDiretora ? [{ id: "usuarios", label: "Usuários", icon: ShieldCheck }] : []),
+    ...(isDiretora ? [{ id: "backup", label: "Backup", icon: Package }] : []),
   ];
 
   // quantos registros dependem deste item (evita apagar cadastro em uso e deixar "—" pelo sistema)
@@ -2041,13 +2141,14 @@ function CadastrosPage({ db, mutate, user }) {
     <div>
       <div className="subtabs">
         {tabs.map((t) => (
-          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} className={`subtab ${tab === t.id ? "subtab-active" : ""}`} data-tab={t.id} onClick={() => setTab(t.id)}>
             <t.icon size={14} />
             {t.label}
           </button>
         ))}
       </div>
 
+      {tab === "backup" && isDiretora && <BackupPanel db={db} mutate={mutate} user={user} />}
       {tab === "instituicoes" && (
         <InstitutionsList
           items={db.institutions}
@@ -6273,8 +6374,15 @@ function Dashboard({ db, user }) {
     );
   };
 
+  const diasBackup = diasDesde(db.ultimoBackup);
   return (
     <div>
+      {user.papel === "diretora" && (diasBackup === null || diasBackup >= BACKUP_DIAS_AVISO) && (
+        <div className="alert-banner no-print" data-testid="aviso-backup">
+          <Bell size={16} />
+          <span>{diasBackup === null ? "Você ainda não baixou nenhum backup dos dados." : `O último backup foi há ${diasBackup} dias.`} Vá em Cadastros → Backup e baixe uma cópia.</span>
+        </div>
+      )}
       <div className="page-header no-print">
         <h2>Painel geral{user.papel !== "diretora" ? " — seus resultados" : ""}</h2>
         <div style={{ display: "flex", gap: 8 }}>
@@ -10020,7 +10128,7 @@ export default function App({ authEmail, onSignOut } = {}) {
     })();
   }, []);
 
-  const mutate = (updater) => {
+  const mutate = (updater, opcoes = {}) => {
     setDb((prev) => {
       let next;
       try {
@@ -10030,7 +10138,7 @@ export default function App({ authEmail, onSignOut } = {}) {
         return prev;
       }
       // auditoria: grava quem mudou o quê (ignora mudanças sem usuário logado, como a carga inicial)
-      if (currentUser && next !== prev) {
+      if (currentUser && next !== prev && !opcoes.semAuditoria) {
         try {
           const ents = diffAuditoria(prev, next, currentUser);
           if (ents.length) next = { ...next, auditoria: [...ents, ...(next.auditoria || prev.auditoria || [])].slice(0, AUDIT_MAX) };
